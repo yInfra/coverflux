@@ -398,6 +398,17 @@
     playFiles(files);
   });
 
+  // phones have no screen/tab capture – don't offer it there
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) {
+    const tab = ui.querySelector("[data-src=tab]");
+    if (tab) tab.style.display = "none";
+  }
+  // installed app: "open with Coverflux" for audio files
+  if ("launchQueue" in window) window.launchQueue.setConsumer(async (params) => {
+    if (!params.files || !params.files.length) return;
+    playFiles(await Promise.all(params.files.map((h) => h.getFile())));
+  });
+
   const cf = createCoverflux(host);
   cf.open();
   window.Coverflux = Object.assign(cf, { web: { playFiles, startLive, stopLive, get source() { return source; } } });

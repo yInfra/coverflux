@@ -1,0 +1,21 @@
+{
+  "name": "Coverflux",
+  "short_name": "Coverflux",
+  "description": "Album art, folded to the beat. Plays your audio files or follows tab, system or microphone audio live – nothing is uploaded.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0b0b0c",
+  "theme_color": "#0b0b0c",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    { "action": "./", "accept": { "audio/*": [".mp3", ".flac", ".wav", ".ogg", ".opus", ".m4a"] } }
+  ]
+}

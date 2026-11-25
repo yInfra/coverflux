@@ -6,6 +6,11 @@
 <title>Coverflux</title>
 <meta name="description" content="Album art folded to the beat – kaleidoscopes, hyperbolic tilings and Droste spirals in your browser. Plays your audio files or follows tab, system or microphone audio live. Nothing is uploaded.">
 <meta name="theme-color" content="#0b0b0c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Coverflux">
 <meta property="og:title" content="Coverflux">
 <meta property="og:description" content="Album art folded to the beat – in your browser, nothing uploaded.">
 <meta property="og:image" content="preview.png">
@@ -19,5 +24,6 @@
 <body>
 <noscript>Coverflux needs JavaScript and WebGL2.</noscript>
 <script src="coverflux-web.js"></script>
+<script>if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>
