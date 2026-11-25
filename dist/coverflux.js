@@ -551,6 +551,9 @@ function coverfluxBeatFactory() {
 function createCoverflux(host) {
   "use strict";
   const closable = host.closable !== false;
+  // UI language: the host decides, else the browser (German or English)
+  const LANG = host.lang || (((typeof navigator !== "undefined" && navigator.language) || "en").toLowerCase().startsWith("de") ? "de" : "en");
+  const t = (de, en) => (LANG === "de" ? de : en);
 
   /* ------------------------------------------------------------------ */
   /* Settings                                                            */
@@ -569,29 +572,30 @@ function createCoverflux(host) {
   };
 
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
+  const GROUPS = { Fluss: t("Fluss", "Flow"), Symmetrie: t("Symmetrie", "Symmetry"), Fraktal: t("Fraktal", "Fractal"), Raum: t("Raum", "Space") };
   function PRESET_KEYS() { return Object.keys(PRESETS); }
   // group: how the list is sectioned · fill: how far the sharp mirrored cover spreads while morphing
   const PRESETS = {
-    liquid:   { label: "Liquid",        group: "Fluss",    mode: 0,  fill: 3.0,  desc: "Marmorstrom, fließt eine Periode weiter" },
-    ripple:   { label: "Ripple",        group: "Fluss",    mode: 2,  fill: 1.6,  desc: "Wasser zieht quer durchs Bild" },
-    vortex:   { label: "Vortex",        group: "Fluss",    mode: 1,  fill: 3.0,  desc: "Ringe drehen volle Runden" },
-    prism:    { label: "Prism",         group: "Fluss",    mode: 4,  fill: 1.8,  desc: "Geriffeltes Glas, Regenbogenkanten" },
-    tunnel:   { label: "Tunnel",        group: "Fluss",    mode: 8,  fill: 0.15, desc: "Droste-Tauchgang ins Cover" },
-    kaleido:  { label: "Kaleido",       group: "Symmetrie", mode: 5, fill: 3.0,  desc: "Faltet sich von innen nach außen" },
-    mandala:  { label: "Mandala",       group: "Symmetrie", mode: 6, fill: 3.0,  desc: "Kaleido auf einer Spirale" },
-    hexa:     { label: "Hexa",          group: "Symmetrie", mode: 9, fill: 3.0,  desc: "Waben mit sechsfacher Spiegelung (p6m)" },
-    rosette:  { label: "Rosette",       group: "Symmetrie", mode: 14, fill: 6.0, desc: "Blütenblätter aus z ↦ zⁿ" },
-    moire:    { label: "Moiré",         group: "Symmetrie", mode: 18, fill: 3.0, desc: "Zwei Kaleido-Gitter, die sich überlagern" },
-    quasi:    { label: "Quasikristall", group: "Symmetrie", mode: 10, fill: 3.0, desc: "Fünf- oder siebenzählig, wiederholt sich nie" },
-    fractal:  { label: "Fractal",       group: "Fraktal",  mode: 7,  fill: 3.0,  desc: "Faltet sich Stufe für Stufe" },
-    sierpinski: { label: "Sierpinski",  group: "Fraktal",  mode: 17, fill: 40.0,  desc: "Dreiecke voller Dreiecke" },
-    inversion: { label: "Inversion",    group: "Fraktal",  mode: 13, fill: 3.0,  desc: "Kreisinversion, Perlenketten" },
-    phyllo:   { label: "Phyllotaxis",   group: "Fraktal",  mode: 15, fill: 3.0,  desc: "Sonnenblumen-Spirale im goldenen Winkel" },
-    escher:   { label: "Escher-Spirale", group: "Raum",    mode: 12, fill: 3.0,  desc: "Dreht sich endlos in sich selbst" },
-    hyper:    { label: "Hyperbolisch",  group: "Raum",     mode: 11, fill: 3.0,  desc: "Poincaré-Scheibe, Kacheln strömen" },
-    triangle: { label: "Dreiecksgruppe", group: "Raum",    mode: 20, fill: 3.0,  desc: "Dreiecks-Kaleidoskop, Winkel wandern" },
-    sphere:   { label: "Sphäre",        group: "Raum",     mode: 16, fill: 3.0,  desc: "Ikosaeder-Kugel, rollt einmal" },
-    moebius:  { label: "Möbius-Strom",  group: "Raum",     mode: 19, fill: 3.0,  desc: "Fließt von einem Pol in den anderen" },
+    liquid:   { label: "Liquid",        group: "Fluss",    mode: 0,  fill: 3.0,  desc: t("Marmorstrom, fließt eine Periode weiter", "Marbled stream, flows one period on") },
+    ripple:   { label: "Ripple",        group: "Fluss",    mode: 2,  fill: 1.6,  desc: t("Wasser zieht quer durchs Bild", "Water sweeps across the picture") },
+    vortex:   { label: "Vortex",        group: "Fluss",    mode: 1,  fill: 3.0,  desc: t("Ringe drehen volle Runden", "Rings turn full circles") },
+    prism:    { label: "Prism",         group: "Fluss",    mode: 4,  fill: 1.8,  desc: t("Geriffeltes Glas, Regenbogenkanten", "Fluted glass, rainbow edges") },
+    tunnel:   { label: "Tunnel",        group: "Fluss",    mode: 8,  fill: 0.15, desc: t("Droste-Tauchgang ins Cover", "Droste dive into the cover") },
+    kaleido:  { label: "Kaleido",       group: "Symmetrie", mode: 5, fill: 3.0,  desc: t("Faltet sich von innen nach außen", "Folds from the centre outwards") },
+    mandala:  { label: "Mandala",       group: "Symmetrie", mode: 6, fill: 3.0,  desc: t("Kaleido auf einer Spirale", "Kaleido on a spiral") },
+    hexa:     { label: "Hexa",          group: "Symmetrie", mode: 9, fill: 3.0,  desc: t("Waben mit sechsfacher Spiegelung (p6m)", "Honeycomb with sixfold mirrors (p6m)") },
+    rosette:  { label: "Rosette",       group: "Symmetrie", mode: 14, fill: 6.0, desc: t("Blütenblätter aus z ↦ zⁿ", "Petals from z ↦ zⁿ") },
+    moire:    { label: "Moiré",         group: "Symmetrie", mode: 18, fill: 3.0, desc: t("Zwei Kaleido-Gitter, die sich überlagern", "Two kaleido lattices interfering") },
+    quasi:    { label: t("Quasikristall", "Quasicrystal"), group: "Symmetrie", mode: 10, fill: 3.0, desc: t("Fünf- oder siebenzählig, wiederholt sich nie", "Five- or sevenfold, never repeats") },
+    fractal:  { label: "Fractal",       group: "Fraktal",  mode: 7,  fill: 3.0,  desc: t("Faltet sich Stufe für Stufe", "Folds in stage by stage") },
+    sierpinski: { label: "Sierpinski",  group: "Fraktal",  mode: 17, fill: 40.0,  desc: t("Dreiecke voller Dreiecke", "Triangles full of triangles") },
+    inversion: { label: "Inversion",    group: "Fraktal",  mode: 13, fill: 3.0,  desc: t("Kreisinversion, Perlenketten", "Circle inversion, strings of pearls") },
+    phyllo:   { label: "Phyllotaxis",   group: "Fraktal",  mode: 15, fill: 3.0,  desc: t("Sonnenblumen-Spirale im goldenen Winkel", "Sunflower spiral at the golden angle") },
+    escher:   { label: t("Escher-Spirale", "Escher spiral"), group: "Raum",    mode: 12, fill: 3.0,  desc: t("Dreht sich endlos in sich selbst", "Turns endlessly into itself") },
+    hyper:    { label: t("Hyperbolisch", "Hyperbolic"),  group: "Raum",     mode: 11, fill: 3.0,  desc: t("Poincaré-Scheibe, Kacheln strömen", "Poincaré disk, tiles streaming") },
+    triangle: { label: t("Dreiecksgruppe", "Triangle group"), group: "Raum",    mode: 20, fill: 3.0,  desc: t("Dreiecks-Kaleidoskop, Winkel wandern", "Triangle kaleidoscope, wandering angles") },
+    sphere:   { label: t("Sphäre", "Sphere"),        group: "Raum",     mode: 16, fill: 3.0,  desc: t("Ikosaeder-Kugel, rollt einmal", "Icosahedral sphere, rolls once") },
+    moebius:  { label: t("Möbius-Strom", "Möbius flow"),  group: "Raum",     mode: 19, fill: 3.0,  desc: t("Fließt von einem Pol in den anderen", "Flows from one pole into the other") },
   };
   // Auto picks from these depending on the energy of the current song section (among the ones switched on).
   const CALM_POOL = ["liquid", "ripple", "prism", "kaleido", "mandala", "hexa", "rosette", "moire", "phyllo", "escher", "sphere"];
@@ -877,10 +881,10 @@ function createCoverflux(host) {
         try { own = await Library.get(hit.id); } catch (_) {}
         if (this.uri !== uri) return;
         if (own) {
-          if (!ok) analysis = Object.assign({}, own, { alignNote: local ? "Datei" : "Datei, ohne Spotify-Abgleich" });
+          if (!ok) analysis = Object.assign({}, own, { alignNote: local ? t("Datei", "file") : t("Datei, ohne Spotify-Abgleich", "file, not matched to Spotify") });
           else {
             const al = Library.align(own, data);
-            if (al.ok) analysis = Object.assign({}, Library.shiftAnalysis(own, al.shift), { alignNote: "Datei, abgeglichen " + (al.shift >= 0 ? "+" : "") + al.shift.toFixed(2) + " s" });
+            if (al.ok) analysis = Object.assign({}, Library.shiftAnalysis(own, al.shift), { alignNote: t("Datei, abgeglichen ", "file, aligned ") + (al.shift >= 0 ? "+" : "") + al.shift.toFixed(2) + " s" });
             else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (Score " + al.score + ", Abstand " + al.margin + ") – nehme Spotify");
           }
         }
@@ -1052,9 +1056,9 @@ function createCoverflux(host) {
 
     describe() {
       const m = this.mult(), g = this.grid;
-      if (this.own) return "Eigene Analyse" + (this.ownNote ? " (" + this.ownNote + ")" : "") + " · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → gefühlt " + Math.round(this.tempo / m) + " BPM";
-      return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · Raster " + Math.round(this.tempo) + " BPM" +
-        (g ? (g.triple ? " · Dreiertakt" : " · Zweiertakt") + (this.shift ? " · um ½ Schlag korrigiert" : "") : "") +
+      if (this.own) return t("Eigene Analyse", "Own analysis") + (this.ownNote ? " (" + this.ownNote + ")" : "") + " · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → " + t("gefühlt ", "felt ") + Math.round(this.tempo / m) + " BPM";
+      return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · " + t("Raster ", "grid ") + Math.round(this.tempo) + " BPM" +
+        (g ? (g.triple ? t(" · Dreiertakt", " · triple meter") : t(" · Zweiertakt", " · duple meter")) + (this.shift ? t(" · um ½ Schlag korrigiert", " · moved by ½ beat") : "") : "") +
         " → gefühlt " + Math.round(this.tempo / m) + " BPM";
     }
 
@@ -1959,37 +1963,37 @@ function createCoverflux(host) {
   root.innerHTML = `
     <canvas aria-hidden="true"></canvas>
     <div class="cf-drag"></div>
-    <div class="cf-error">WebGL2 ist hier nicht verfügbar – Visualizer kann nicht starten.</div>
+    <div class="cf-error">${t("WebGL2 ist hier nicht verfügbar – Visualizer kann nicht starten.", "WebGL2 is not available here – the visualizer can't start.")}</div>
     <div class="cf-info cf-chrome"><div class="cf-title"></div><div class="cf-artist"></div></div>
     <div class="cf-note cf-chrome"></div>
-    <div class="cf-panel cf-chrome" data-panel="modes" role="dialog" aria-label="Modi">
-      <div class="cf-ph"><b>Modus</b><small class="cf-modes-hint"></small></div>
-      <div class="cf-list" role="radiogroup" aria-label="Modus">
+    <div class="cf-panel cf-chrome" data-panel="modes" role="dialog" aria-label="${t("Modi", "Modes")}">
+      <div class="cf-ph"><b>${t("Modus", "Mode")}</b><small class="cf-modes-hint"></small></div>
+      <div class="cf-list" role="radiogroup" aria-label="${t("Modus", "Mode")}">
         <div class="cf-mrow cf-auto" role="radio" tabindex="0" data-k="auto"><span class="cf-radio"></span><span class="cf-mt"><b>Auto</b><span class="cf-auto-d"></span></span>
-          <span class="cf-auto-links"><button class="cf-link cf-all">Alle</button><button class="cf-link cf-none">Keine</button></span></div>
-        ${["Fluss", "Symmetrie", "Fraktal", "Raum"].map((g) => `<div class="cf-group">${g}<small>in Auto</small></div>` + PRESET_KEYS().filter((k) => PRESETS[k].group === g).map((k) => `<div class="cf-mrow" role="radio" tabindex="0" data-k="${k}"><span class="cf-radio"></span><span class="cf-mt"><b>${PRESETS[k].label}</b><span>${PRESETS[k].desc}</span></span><button class="cf-check" role="checkbox" data-k="${k}" aria-label="${PRESETS[k].label} in Auto verwenden"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2l2 2L8 3"/></svg></button></div>`).join("")).join("")}
+          <span class="cf-auto-links"><button class="cf-link cf-all">${t("Alle", "All")}</button><button class="cf-link cf-none">${t("Keine", "None")}</button></span></div>
+        ${["Fluss", "Symmetrie", "Fraktal", "Raum"].map((g) => `<div class="cf-group">${GROUPS[g]}<small>${t("in Auto", "in Auto")}</small></div>` + PRESET_KEYS().filter((k) => PRESETS[k].group === g).map((k) => `<div class="cf-mrow" role="radio" tabindex="0" data-k="${k}"><span class="cf-radio"></span><span class="cf-mt"><b>${PRESETS[k].label}</b><span>${PRESETS[k].desc}</span></span><button class="cf-check" role="checkbox" data-k="${k}" aria-label="${PRESETS[k].label} ${t("in Auto verwenden", "in Auto")}"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2l2 2L8 3"/></svg></button></div>`).join("")).join("")}
       </div>
-      <label class="cf-row">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"><span class="cf-val cf-intv"></span></label>
+      <label class="cf-row">${t("Intensität", "Intensity")} <input class="cf-intensity" type="range" min="0" max="100" aria-label="${t("Intensität", "Intensity")}"><span class="cf-val cf-intv"></span></label>
     </div>
     <div class="cf-panel cf-chrome" data-panel="tempo" role="dialog" aria-label="Tempo">
       <div class="cf-ph"><b>Tempo</b></div>
       <p class="cf-detect"></p>
-      <div class="cf-ratio" role="radiogroup" aria-label="Tempo-Gefühl">
-        <button role="radio" data-r="auto">Auto</button><button role="radio" data-r="2" title="halbes Tempo">½</button><button role="radio" data-r="1">1×</button><button role="radio" data-r="0.5" title="doppeltes Tempo">2×</button><button role="radio" data-r="3" title="ein Puls pro Dreiertakt">⅓</button>
+      <div class="cf-ratio" role="radiogroup" aria-label="${t("Tempo-Gefühl", "Tempo feel")}">
+        <button role="radio" data-r="auto">Auto</button><button role="radio" data-r="2" title="${t("halbes Tempo", "half time")}">½</button><button role="radio" data-r="1">1×</button><button role="radio" data-r="0.5" title="${t("doppeltes Tempo", "double time")}">2×</button><button role="radio" data-r="3" title="${t("ein Puls pro Dreiertakt", "one pulse per triple bar")}">⅓</button>
       </div>
-      <button class="cf-tap" aria-label="Tempo tappen">Tap<small>im Takt klicken oder T drücken · mind. 4×</small></button>
+      <button class="cf-tap" aria-label="${t("Tempo tappen", "Tap the tempo")}">Tap<small>${t("im Takt klicken oder T drücken · mind. 4×", "click or press T on the beat · 4× or more")}</small></button>
       <div class="cf-lib">
-        <div class="cf-lib-h"><b>Eigene Beat-Analyse</b><small class="cf-lib-n"></small></div>
-        <p class="cf-lib-t">Analysiert deine Musikdateien direkt hier, ohne Upload. Genauer als Spotifys Analyse und auch für lokale Dateien.</p>
-        <div class="cf-lib-b"><button class="cf-btn cf-lib-dir">Ordner wählen</button><button class="cf-btn cf-lib-files">Dateien</button><button class="cf-link cf-lib-clear">Leeren</button></div>
+        <div class="cf-lib-h"><b>${t("Eigene Beat-Analyse", "Own beat analysis")}</b><small class="cf-lib-n"></small></div>
+        <p class="cf-lib-t">${t("Analysiert deine Musikdateien direkt hier, ohne Upload. Genauer als Spotifys Analyse und auch für lokale Dateien.", "Analyses your music files right here, nothing is uploaded. More precise than Spotify's analysis and works for local files too.")}</p>
+        <div class="cf-lib-b"><button class="cf-btn cf-lib-dir">${t("Ordner wählen", "Choose folder")}</button><button class="cf-btn cf-lib-files">${t("Dateien", "Files")}</button><button class="cf-link cf-lib-clear">${t("Leeren", "Clear")}</button></div>
         <div class="cf-lib-p" hidden><i></i><small></small></div>
         <input class="cf-in-dir" type="file" multiple webkitdirectory hidden>
         <input class="cf-in-files" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.ogg,.opus,.m4a" hidden>
       </div>
-      <label class="cf-row" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
+      <label class="cf-row" title="${t("Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]", "Shifts the visuals against the sound. Plus = earlier. Keys [ and ]")}">Sync <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="${t("Sync-Versatz", "Sync offset")}"><span class="cf-val cf-syncv"></span></label>
     </div>
     <div class="cf-controls cf-chrome">
-      <div class="cf-seg" role="radiogroup" aria-label="Bildquelle">
+      <div class="cf-seg" role="radiogroup" aria-label="${t("Bildquelle", "Image source")}">
         <span class="cf-thumb"></span>
         <button role="radio" data-src="track">Song</button>
         <button role="radio" data-src="context">Playlist</button>
@@ -1997,11 +2001,11 @@ function createCoverflux(host) {
       <span class="cf-sep"></span>
       <button class="cf-chip cf-modes" data-open="modes" aria-haspopup="dialog" aria-expanded="false"><small class="cf-modes-k">Auto</small><span class="cf-modes-v"></span></button>
       <button class="cf-chip cf-bpm" data-open="tempo" aria-haspopup="dialog" aria-expanded="false"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
-      <button class="cf-icon cf-frame" aria-pressed="false" aria-label="Quadrat-Modus">
+      <button class="cf-icon cf-frame" aria-pressed="false" aria-label="${t("Quadrat-Modus", "Square mode")}">
         <svg class="cf-i-full" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg>
         <svg class="cf-i-sq" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x=".75" y=".75" width="12.5" height="12.5" rx="3" stroke-opacity=".35"/></svg>
       </button>
-      <button class="cf-icon cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
+      <button class="cf-icon cf-close" aria-label="${t("Visualizer schließen", "Close visualizer")}" title="${t("Schließen (Esc)", "Close (Esc)")}">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
       </button>
     </div>`;
@@ -2067,7 +2071,7 @@ function createCoverflux(host) {
     elSyncV.textContent = (settings.syncMs > 0 ? "+" : "") + settings.syncMs + " ms";
     root.classList.toggle("cf-noinfo", !settings.showInfo);
     elFrame.setAttribute("aria-pressed", String(settings.frame === "square"));
-    elFrame.title = settings.frame === "square" ? "Quadrat – klicken für gespiegeltes Vollbild" : "Vollbild – klicken, damit das Cover ein Quadrat bleibt";
+    elFrame.title = settings.frame === "square" ? t("Quadrat – klicken für gespiegeltes Vollbild", "Square – click for mirrored full screen") : t("Vollbild – klicken, damit das Cover ein Quadrat bleibt", "Full screen – click to keep the cover square");
     syncModes();
   }
 
@@ -2080,10 +2084,10 @@ function createCoverflux(host) {
     });
     checks.forEach((c) => c.setAttribute("aria-checked", String(on.includes(c.dataset.k))));
     elList.classList.toggle("cf-solo", !auto);
-    elAutoD.textContent = "wechselt zwischen " + (on.length === PRESET_KEYS().length ? "allen " + on.length : on.length + " von " + PRESET_KEYS().length) + " Modi";
-    elModesK.textContent = auto ? "Auto" : "Modus";
+    elAutoD.textContent = t("wechselt zwischen ", "switches between ") + (on.length === PRESET_KEYS().length ? t("allen ", "all ") + on.length : on.length + t(" von ", " of ") + PRESET_KEYS().length) + t(" Modi", " modes");
+    elModesK.textContent = auto ? "Auto" : t("Modus", "Mode");
     elModesV.textContent = (PRESETS[state.presetKey] || PRESETS[on[0]]).label;
-    elModesHint.textContent = auto ? "Zeile wählt einen festen Modus · Häkchen = in Auto" : "Fest: " + PRESETS[settings.mode].label;
+    elModesHint.textContent = auto ? t("Zeile wählt einen festen Modus · Häkchen = in Auto", "Row picks one fixed mode · tick = in Auto") : t("Fest: ", "Fixed: ") + PRESETS[settings.mode].label;
   }
 
 
@@ -2103,7 +2107,7 @@ function createCoverflux(host) {
   }
   function setAutoOff(list) {
     settings.autoOff = PRESET_KEYS().filter((k) => list.includes(k));
-    if (settings.autoOff.length >= PRESET_KEYS().length) { settings.autoOff = PRESET_KEYS().filter((k) => k !== PRESET_KEYS()[0]); note("Mindestens ein Modus bleibt in Auto"); }
+    if (settings.autoOff.length >= PRESET_KEYS().length) { settings.autoOff = PRESET_KEYS().filter((k) => k !== PRESET_KEYS()[0]); note(t("Mindestens ein Modus bleibt in Auto", "At least one mode stays in Auto")); }
     saveSettings(); syncModes();
     if (settings.mode === "auto" && settings.autoOff.includes(state.presetKey)) state.pending = true;
   }
@@ -2113,7 +2117,7 @@ function createCoverflux(host) {
   });
   checks.forEach((c) => c.addEventListener("click", () => {
     const k = c.dataset.k, off = settings.autoOff;
-    if (!off.includes(k) && autoOn().length === 1) { note("Mindestens ein Modus bleibt in Auto"); return; }
+    if (!off.includes(k) && autoOn().length === 1) { note(t("Mindestens ein Modus bleibt in Auto", "At least one mode stays in Auto")); return; }
     setAutoOff(off.includes(k) ? off.filter((x) => x !== k) : off.concat(k));
   }));
   $(".cf-all").addEventListener("click", () => setAutoOff([]));
@@ -2123,7 +2127,7 @@ function createCoverflux(host) {
     if (!uri) return;
     if (b.dataset.r === "auto") delete tempoOverrides[uri]; else tempoOverrides[uri] = +b.dataset.r;
     saveTempo(); refreshStatus(); state.pending = true;
-    note(b.dataset.r === "auto" ? "Tempo: automatisch erkannt" : "Tempo für diesen Song fixiert");
+    note(b.dataset.r === "auto" ? t("Tempo: automatisch erkannt", "Tempo: detected automatically") : t("Tempo für diesen Song fixiert", "Tempo fixed for this song"));
   }));
 
   let noteTimer = 0;
@@ -2147,14 +2151,14 @@ function createCoverflux(host) {
   let taps = [], tapHit = 0;
   function tap() {
     const uri = audio.uri;
-    if (!uri || audio.synthetic) { note("Tap braucht die Spotify-Analyse"); return; }
+    if (!uri || audio.synthetic) { note(t("Tap braucht eine Beat-Analyse", "Tap needs a beat analysis")); return; }
     const now = performance.now();
     if (taps.length && now - taps[taps.length - 1].now > 2200) taps = [];
     const pos = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0) + settings.syncMs / 1000;
     taps.push({ now, B: audio.beatPos(pos) });
     if (taps.length > 16) taps.shift();
     elTap.classList.add("cf-hit"); clearTimeout(tapHit); tapHit = setTimeout(() => elTap.classList.remove("cf-hit"), 90);
-    if (taps.length < 4) { note("Tap " + taps.length + " … weiter im Takt"); return; }
+    if (taps.length < 4) { note("Tap " + taps.length + t(" … weiter im Takt", " … keep going")); return; }
     const d = [];
     for (let i = 1; i < taps.length; i++) d.push(taps[i].B - taps[i - 1].B);
     d.sort((x, y) => x - y);
@@ -2173,7 +2177,7 @@ function createCoverflux(host) {
     tempoOverrides[uri] = { m, ph: Math.round(phFelt * m * 1000) / 1000 };
     saveTempo(); refreshStatus();
     if (Math.abs(prev - m) > 1e-3) { state.cycleId = null; state.dissolve = Math.max(state.dissolve, 0.6); }
-    note("Tap: " + Math.round(audio.tempo / m) + " BPM · Beat gesetzt");
+    note("Tap: " + Math.round(audio.tempo / m) + t(" BPM · Beat gesetzt", " BPM · beat set"));
   }
   elTap.addEventListener("click", tap);
 
@@ -2181,7 +2185,7 @@ function createCoverflux(host) {
   const elLibN = $(".cf-lib-n"), elLibP = $(".cf-lib-p"), elLibBar = $(".cf-lib-p i"), elLibTxt = $(".cf-lib-p small");
   const elInDir = $(".cf-in-dir"), elInFiles = $(".cf-in-files"), libButtons = [$(".cf-lib-dir"), $(".cf-lib-files")];
   function syncLib() {
-    elLibN.textContent = !Library.available ? "nicht verfügbar" : Library.size ? Library.size + (Library.size === 1 ? " Song" : " Songs") : "noch leer";
+    elLibN.textContent = !Library.available ? t("nicht verfügbar", "not available") : Library.size ? Library.size + (Library.size === 1 ? " Song" : " Songs") : t("noch leer", "empty");
     libButtons.forEach((b) => { if (Library.busy || !Library.available) b.setAttribute("disabled", ""); else b.removeAttribute("disabled"); });
   }
   async function analyseFiles(files) {
@@ -2189,10 +2193,10 @@ function createCoverflux(host) {
     elLibP.hidden = false;
     const added = await Library.addFiles(files, (done, total, name) => {
       elLibBar.style.setProperty("--p", (total ? (done / total) * 100 : 100) + "%");
-      elLibTxt.textContent = total ? done + " / " + total + (name ? " · " + name : "") : "Keine Audiodateien gefunden";
+      elLibTxt.textContent = total ? done + " / " + total + (name ? " · " + name : "") : t("Keine Audiodateien gefunden", "No audio files found");
       syncLib();
     });
-    elLibTxt.textContent = added ? added + " neu analysiert" : "Nichts Neues – alles schon analysiert";
+    elLibTxt.textContent = added ? added + t(" neu analysiert", " newly analysed") : t("Nichts Neues – alles schon analysiert", "Nothing new – all analysed already");
     syncLib();
     if (added) reloadCurrent();
   }
@@ -2200,7 +2204,7 @@ function createCoverflux(host) {
   $(".cf-lib-files").addEventListener("click", () => elInFiles.click());
   elInDir.addEventListener("change", () => { analyseFiles(elInDir.files); elInDir.value = ""; });
   elInFiles.addEventListener("change", () => { analyseFiles(elInFiles.files); elInFiles.value = ""; });
-  $(".cf-lib-clear").addEventListener("click", async () => { await Library.clear(); syncLib(); elLibP.hidden = true; reloadCurrent(); note("Eigene Analysen gelöscht"); });
+  $(".cf-lib-clear").addEventListener("click", async () => { await Library.clear(); syncLib(); elLibP.hidden = true; reloadCurrent(); note(t("Eigene Analysen gelöscht", "Own analyses cleared")); });
   Library.init().then(() => { syncLib(); if (Library.size) reloadCurrent(); });
 
   $(".cf-close").addEventListener("click", () => close());
@@ -2370,7 +2374,7 @@ function createCoverflux(host) {
     try {
       if (settings.source === "context" && host.contextCover) {
         url = await host.contextCover();
-        if (!url && token === coverToken) note("Kein Playlist-Cover verfügbar – zeige Song-Cover");
+        if (!url && token === coverToken) note(t("Kein Playlist-Cover verfügbar – zeige Song-Cover", "No playlist cover – showing the song cover"));
       }
       if (!url && host.trackCover) url = await host.trackCover();
     } catch (_) { url = null; }
@@ -2427,10 +2431,10 @@ function createCoverflux(host) {
     elDot.classList.toggle("cf-live", live);
     elBpmV.textContent = Math.round(audio.tempo / m) + " BPM";
     elBpmM.textContent = !live ? "sim" : typeof o === "object" ? "tap" : o !== undefined ? ratio : "";
-    elBpm.title = live ? "Tempo – der Punkt blinkt auf jedem Beat" : "Keine Audio-Analyse – simulierter Takt";
+    elBpm.title = live ? t("Tempo – der Punkt blinkt auf jedem Beat", "Tempo – the dot blinks on every beat") : t("Keine Audio-Analyse – simulierter Takt", "No audio analysis – simulated beat");
     const cur = o === undefined ? "auto" : typeof o === "number" ? String(o) : "";
     ratioButtons.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.r === cur)));
-    elDetect.textContent = live ? audio.describe() : audio.localMissing ? "Lokale Datei ohne Analyse – simulierter Takt. Unten den Ordner analysieren, dann sitzt der Beat." : "Keine Analyse – simulierter Takt";
+    elDetect.textContent = live ? audio.describe() : audio.localMissing ? t("Lokale Datei ohne Analyse – simulierter Takt. Unten den Ordner analysieren, dann sitzt der Beat.", "Local file without analysis – simulated beat. Analyse its folder below and the beat locks in.") : t("Keine Analyse – simulierter Takt", "No analysis – simulated beat");
     elDetect.title = elDetect.textContent;
   }
 
