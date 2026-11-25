@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.5.0
+// VERSION: 2.6.0
 
 (function Coverflux() {
   "use strict";
@@ -21,7 +21,11 @@
   const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", showInfo: true, syncMs: 0, frame: "full" };
   const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(S.LocalStorage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
   const settings = loadJSON(SETTINGS_KEY, DEFAULTS);
-  if (!PRESET_KEYS().includes(settings.mode) && settings.mode !== "auto") settings.mode = "auto";
+  // Modes Auto may pick from. One enabled mode = that mode, fixed. (Migrates the old single `mode` setting.)
+  if (!Array.isArray(settings.modes)) settings.modes = PRESET_KEYS().includes(settings.mode) ? [settings.mode] : PRESET_KEYS();
+  settings.modes = PRESET_KEYS().filter((k) => settings.modes.includes(k));
+  if (!settings.modes.length) settings.modes = PRESET_KEYS();
+  delete settings.mode;
   const tempoOverrides = loadJSON(TEMPO_KEY, {});
   const saveSettings = () => { try { S.LocalStorage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
   const saveTempo = () => {
@@ -33,14 +37,14 @@
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
   function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
   const PRESETS = {
-    liquid:  { label: "Liquid",  mode: 0, fill: 3.0 },
-    vortex:  { label: "Vortex",  mode: 1, fill: 3.0 },
-    ripple:  { label: "Ripple",  mode: 2, fill: 1.6 },
-    prism:   { label: "Prism",   mode: 4, fill: 1.8 },
-    kaleido: { label: "Kaleido", mode: 5, fill: 3.0 },
-    mandala: { label: "Mandala", mode: 6, fill: 3.0 },
-    fractal: { label: "Fractal", mode: 7, fill: 3.0 },
-    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.15 },
+    liquid:  { label: "Liquid",  mode: 0, fill: 3.0,  desc: "Marmorstrom, fließt eine Periode weiter" },
+    vortex:  { label: "Vortex",  mode: 1, fill: 3.0,  desc: "Ringe drehen volle Runden" },
+    ripple:  { label: "Ripple",  mode: 2, fill: 1.6,  desc: "Wasser zieht quer durchs Bild" },
+    prism:   { label: "Prism",   mode: 4, fill: 1.8,  desc: "Geriffeltes Glas, Regenbogenkanten" },
+    kaleido: { label: "Kaleido", mode: 5, fill: 3.0,  desc: "Faltet sich von innen nach außen" },
+    mandala: { label: "Mandala", mode: 6, fill: 3.0,  desc: "Kaleido auf einer Spirale" },
+    fractal: { label: "Fractal", mode: 7, fill: 3.0,  desc: "Faltet sich Stufe für Stufe" },
+    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.15, desc: "Droste-Tauchgang ins Cover" },
   };
   // Auto mode picks from these depending on the energy of the current song section.
   const CALM_POOL = ["liquid", "ripple", "kaleido", "mandala", "prism"];
@@ -945,50 +949,95 @@
   #coverflux .cf-info.cf-swap .cf-artist{animation-delay:.08s}
   #coverflux.cf-noinfo .cf-info{display:none}
   @keyframes cf-in{from{opacity:0;transform:translateY(10px);filter:blur(6px)}to{opacity:1;transform:none;filter:none}}
-  #coverflux .cf-controls{position:absolute;right:24px;bottom:22px;display:flex;align-items:center;gap:4px;padding:6px;
-    border-radius:999px;background:rgba(14,14,15,.52);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 10px 30px rgba(0,0,0,.35);-webkit-app-region:no-drag}
-  #coverflux .cf-seg{display:flex;position:relative;border-radius:999px;background:rgba(255,255,255,.06);padding:2px}
+  /* controls: one slim glass bar, details live in two popover panels */
+  #coverflux{--cf-glass:rgba(16,16,18,.68);--cf-line:rgba(255,255,255,.08);--cf-text:#f3efe8;--cf-mute:rgba(243,239,232,.56);
+    --cf-ease:cubic-bezier(.2,.8,.2,1)}
   #coverflux button{all:unset;cursor:pointer;box-sizing:border-box}
-  #coverflux .cf-seg button{position:relative;z-index:1;padding:6px 12px;font-size:12px;font-weight:600;border-radius:999px;color:rgba(243,239,232,.62);
+  #coverflux .cf-controls{position:absolute;right:24px;bottom:22px;display:flex;align-items:center;gap:2px;padding:5px;
+    border-radius:999px;background:var(--cf-glass);backdrop-filter:blur(20px) saturate(1.5);-webkit-backdrop-filter:blur(20px) saturate(1.5);
+    box-shadow:inset 0 0 0 1px var(--cf-line),0 12px 32px rgba(0,0,0,.32);-webkit-app-region:no-drag}
+  #coverflux .cf-sep{width:1px;height:16px;margin:0 5px;background:var(--cf-line)}
+  #coverflux .cf-seg{display:flex;position:relative;border-radius:999px;background:rgba(255,255,255,.05);padding:2px}
+  #coverflux .cf-seg button{position:relative;z-index:1;padding:6px 12px;font-size:12px;font-weight:600;border-radius:999px;color:var(--cf-mute);
     transition:color .2s ease}
+  #coverflux .cf-seg button:hover{color:var(--cf-text)}
   #coverflux .cf-seg button[aria-checked="true"]{color:#111}
   #coverflux .cf-seg .cf-thumb{position:absolute;top:2px;bottom:2px;border-radius:999px;background:var(--cf-accent);
-    transition:left .35s cubic-bezier(.3,.8,.2,1),width .35s cubic-bezier(.3,.8,.2,1)}
-  #coverflux .cf-field{display:flex;align-items:center;gap:8px;padding:0 9px;height:30px;font-size:11px;font-weight:600;letter-spacing:.06em;
-    text-transform:uppercase;color:rgba(243,239,232,.55)}
-  #coverflux select{all:unset;cursor:pointer;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;color:#f3efe8;padding-right:14px;
-    background:linear-gradient(45deg,transparent 50%,currentColor 50%) right 4px center/4px 4px no-repeat,
-      linear-gradient(-45deg,transparent 50%,currentColor 50%) right 0 center/4px 4px no-repeat}
-  #coverflux select option{background:#1c1c1e;color:#f3efe8}
-  #coverflux input[type=range]{-webkit-appearance:none;appearance:none;width:84px;height:3px;border-radius:3px;cursor:pointer;
-    background:linear-gradient(90deg,var(--cf-accent) var(--v,70%),rgba(255,255,255,.18) var(--v,70%))}
-  #coverflux input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#f3efe8;
-    box-shadow:0 0 0 4px rgba(255,255,255,.08);transition:transform .15s ease}
-  #coverflux input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.2)}
-  #coverflux .cf-sync input{width:64px}
-  #coverflux .cf-val{min-width:44px;font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;color:#f3efe8;font-size:11px}
-  #coverflux .cf-pill{display:flex;align-items:center;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;color:#f3efe8;transition:background .2s ease}
-  #coverflux .cf-pill:hover{background:rgba(255,255,255,.08)}
-  #coverflux .cf-tap.cf-hit{background:rgba(255,255,255,.16)}
-  #coverflux .cf-dot{transform:scale(calc(1 + var(--cf-beat, 0) * .9));will-change:transform}
-  #coverflux .cf-bpm{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;
-    font-variant-numeric:tabular-nums;color:#f3efe8;transition:background .2s ease}
-  #coverflux .cf-bpm:hover{background:rgba(255,255,255,.08)}
-  #coverflux .cf-bpm small{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(243,239,232,.5)}
-  #coverflux .cf-dot{width:6px;height:6px;border-radius:50%;background:#7a7a7a;flex:none}
+    transition:left .35s var(--cf-ease),width .35s var(--cf-ease)}
+  #coverflux .cf-chip{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:999px;font-size:12px;font-weight:600;
+    color:var(--cf-text);font-variant-numeric:tabular-nums;transition:background .2s ease}
+  #coverflux .cf-chip:hover,#coverflux .cf-chip[aria-expanded="true"]{background:rgba(255,255,255,.09)}
+  #coverflux .cf-chip small{font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--cf-mute)}
+  #coverflux .cf-icon{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:rgba(243,239,232,.78);
+    transition:background .2s ease,color .2s ease,transform .25s var(--cf-ease)}
+  #coverflux .cf-icon:hover{background:rgba(255,255,255,.09);color:#fff}
+  #coverflux .cf-icon svg{display:block}
+  #coverflux .cf-frame .cf-i-sq{display:none}
+  #coverflux .cf-frame[aria-pressed="true"] .cf-i-sq{display:block}
+  #coverflux .cf-frame[aria-pressed="true"] .cf-i-full{display:none}
+  #coverflux .cf-close:hover{transform:rotate(90deg)}
+  #coverflux .cf-dot{width:6px;height:6px;border-radius:50%;background:#7a7a7a;flex:none;
+    transform:scale(calc(1 + var(--cf-beat, 0) * .9));will-change:transform}
   #coverflux .cf-dot.cf-live{background:var(--cf-accent);box-shadow:0 0 10px var(--cf-accent)}
-  #coverflux .cf-close{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:rgba(243,239,232,.75);
-    transition:background .2s ease,color .2s ease,transform .2s ease}
-  #coverflux .cf-close:hover{background:rgba(255,255,255,.1);color:#fff;transform:rotate(90deg)}
-  #coverflux button:focus-visible,#coverflux select:focus-visible,#coverflux input:focus-visible{outline:2px solid var(--cf-accent);outline-offset:2px}
+
+  #coverflux .cf-panel{position:absolute;right:24px;bottom:72px;width:min(372px,calc(100% - 48px));padding:14px;border-radius:18px;
+    background:var(--cf-glass);backdrop-filter:blur(24px) saturate(1.5);-webkit-backdrop-filter:blur(24px) saturate(1.5);
+    box-shadow:inset 0 0 0 1px var(--cf-line),0 18px 48px rgba(0,0,0,.4);-webkit-app-region:no-drag;
+    opacity:0;transform:translateY(8px) scale(.985);transform-origin:bottom right;pointer-events:none;visibility:hidden;
+    transition:opacity .18s ease,transform .22s var(--cf-ease),visibility 0s linear .22s}
+  #coverflux .cf-panel.cf-on{opacity:1;transform:none;pointer-events:auto;visibility:visible;transition:opacity .18s ease,transform .22s var(--cf-ease),visibility 0s}
+  #coverflux .cf-ph{display:flex;align-items:baseline;gap:10px;margin:2px 2px 12px}
+  #coverflux .cf-ph b{font-size:13px;font-weight:700;letter-spacing:-.01em}
+  #coverflux .cf-ph small{flex:1;font-size:11px;color:var(--cf-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #coverflux .cf-detect{margin:-6px 2px 12px;font-size:11px;line-height:1.45;color:var(--cf-mute)}
+  #coverflux .cf-link{font-size:11px;font-weight:600;color:var(--cf-mute);padding:2px 4px;border-radius:6px}
+  #coverflux .cf-link:hover{color:var(--cf-text)}
+  #coverflux .cf-tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #coverflux .cf-tile{position:relative;display:block;padding:10px 34px 10px 12px;border-radius:12px;background:rgba(255,255,255,.035);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);transition:background .2s ease,box-shadow .2s ease}
+  #coverflux .cf-tile:hover{background:rgba(255,255,255,.07)}
+  #coverflux .cf-tile b{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:650;color:var(--cf-mute);transition:color .2s ease}
+  #coverflux .cf-tile span{display:block;margin-top:3px;font-size:11px;line-height:1.35;color:rgba(243,239,232,.4)}
+  #coverflux .cf-tile i{position:absolute;right:11px;top:11px;width:16px;height:16px;border-radius:50%;
+    box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.22);display:grid;place-items:center;transition:background .2s ease,box-shadow .2s ease}
+  #coverflux .cf-tile i svg{opacity:0;transform:scale(.6);transition:opacity .15s ease,transform .2s var(--cf-ease)}
+  #coverflux .cf-tile[aria-pressed="true"]{background:color-mix(in srgb,var(--cf-accent) 12%,transparent);
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cf-accent) 38%,transparent)}
+  #coverflux .cf-tile[aria-pressed="true"] b{color:var(--cf-text)}
+  #coverflux .cf-tile[aria-pressed="true"] span{color:var(--cf-mute)}
+  #coverflux .cf-tile[aria-pressed="true"] i{background:var(--cf-accent);box-shadow:none;color:#111}
+  #coverflux .cf-tile[aria-pressed="true"] i svg{opacity:1;transform:none}
+  #coverflux .cf-tile.cf-running b::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--cf-accent);
+    box-shadow:0 0 8px var(--cf-accent);animation:cf-breathe 1.6s ease-in-out infinite}
+  @keyframes cf-breathe{50%{opacity:.35}}
+  #coverflux .cf-row{display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px 4px 0;border-top:1px solid var(--cf-line);
+    font-size:12px;font-weight:600;color:var(--cf-mute)}
+  #coverflux .cf-row input{flex:1}
+  #coverflux .cf-val{min-width:52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--cf-text);font-size:12px}
+  #coverflux input[type=range]{-webkit-appearance:none;appearance:none;height:3px;border-radius:3px;cursor:pointer;
+    background:linear-gradient(90deg,var(--cf-accent) var(--v,70%),rgba(255,255,255,.16) var(--v,70%))}
+  #coverflux input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#f3efe8;
+    box-shadow:0 0 0 4px rgba(255,255,255,.08),0 2px 6px rgba(0,0,0,.3);transition:transform .15s ease}
+  #coverflux input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15)}
+  #coverflux .cf-ratio{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;padding:3px;border-radius:12px;background:rgba(255,255,255,.04)}
+  #coverflux .cf-ratio button{text-align:center;padding:7px 0;border-radius:9px;font-size:12px;font-weight:650;color:var(--cf-mute);
+    transition:background .2s ease,color .2s ease}
+  #coverflux .cf-ratio button:hover{color:var(--cf-text)}
+  #coverflux .cf-ratio button[aria-checked="true"]{background:var(--cf-accent);color:#111}
+  #coverflux .cf-tap{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:100%;height:68px;margin-top:8px;
+    border-radius:12px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+    font-size:14px;font-weight:700;letter-spacing:.02em;transition:background .25s ease,transform .12s ease}
+  #coverflux .cf-tap small{font-size:11px;font-weight:500;color:var(--cf-mute)}
+  #coverflux .cf-tap:hover{background:rgba(255,255,255,.07)}
+  #coverflux .cf-tap.cf-hit{background:color-mix(in srgb,var(--cf-accent) 28%,transparent);transform:scale(.985);transition:none}
+  #coverflux button:focus-visible,#coverflux input:focus-visible{outline:2px solid var(--cf-accent);outline-offset:2px}
   #coverflux .cf-note{position:absolute;right:28px;bottom:74px;font-size:11px;color:rgba(243,239,232,.7);opacity:0;transition:opacity .4s ease;pointer-events:none}
   #coverflux .cf-note.cf-show{opacity:1}
   #coverflux .cf-error{position:absolute;inset:0;display:none;place-items:center;font-size:14px;color:rgba(243,239,232,.7)}
   #coverflux.cf-failed .cf-error{display:grid}
-  @media (max-width:1100px){#coverflux .cf-sync{display:none}}
-  @media (max-width:900px){#coverflux .cf-field.cf-int{display:none}#coverflux .cf-info{max-width:30vw}}
-  @media (prefers-reduced-motion:reduce){#coverflux,#coverflux .cf-chrome{transition:none}}
+  @media (max-width:900px){#coverflux .cf-chip small{display:none}#coverflux .cf-info{max-width:30vw}}
+  @media (prefers-reduced-motion:reduce){#coverflux,#coverflux .cf-chrome,#coverflux .cf-panel{transition:none}
+    #coverflux .cf-tile.cf-running b::after{animation:none}}
   `;
   document.head.appendChild(style);
 
@@ -1002,25 +1051,34 @@
     <div class="cf-error">WebGL2 ist hier nicht verfügbar – Visualizer kann nicht starten.</div>
     <div class="cf-info cf-chrome"><div class="cf-title"></div><div class="cf-artist"></div></div>
     <div class="cf-note cf-chrome"></div>
+    <div class="cf-panel cf-chrome" data-panel="modes" role="dialog" aria-label="Modi">
+      <div class="cf-ph"><b>Modi</b><small class="cf-modes-hint"></small><button class="cf-link cf-all">Alle</button></div>
+      <div class="cf-tiles">${PRESET_KEYS().map((k) => `<button class="cf-tile" data-k="${k}" aria-pressed="true" title="Klicken: in Auto an/aus · Doppelklick: nur diesen Modus"><b>${PRESETS[k].label}</b><span>${PRESETS[k].desc}</span><i><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2l2 2L8 3"/></svg></i></button>`).join("")}</div>
+      <label class="cf-row">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"><span class="cf-val cf-intv"></span></label>
+    </div>
+    <div class="cf-panel cf-chrome" data-panel="tempo" role="dialog" aria-label="Tempo">
+      <div class="cf-ph"><b>Tempo</b></div>
+      <p class="cf-detect"></p>
+      <div class="cf-ratio" role="radiogroup" aria-label="Tempo-Gefühl">
+        <button role="radio" data-r="auto">Auto</button><button role="radio" data-r="2" title="halbes Tempo">½</button><button role="radio" data-r="1">1×</button><button role="radio" data-r="0.5" title="doppeltes Tempo">2×</button><button role="radio" data-r="3" title="ein Puls pro Dreiertakt">⅓</button>
+      </div>
+      <button class="cf-tap" aria-label="Tempo tappen">Tap<small>im Takt klicken oder T drücken · mind. 4×</small></button>
+      <label class="cf-row" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
+    </div>
     <div class="cf-controls cf-chrome">
       <div class="cf-seg" role="radiogroup" aria-label="Bildquelle">
         <span class="cf-thumb"></span>
         <button role="radio" data-src="track">Song</button>
         <button role="radio" data-src="context">Playlist</button>
       </div>
-      <label class="cf-field">Modus
-        <select class="cf-mode" aria-label="Modus">
-          <option value="auto">Auto</option>
-          ${PRESET_KEYS().map((k) => `<option value="${k}">${PRESETS[k].label}</option>`).join("")}
-        </select>
-      </label>
-      <label class="cf-field cf-int">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"></label>
-      <label class="cf-field cf-sync" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync
-        <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
-      <button class="cf-pill cf-frame" aria-label="Bildfläche umschalten: Vollbild gespiegelt oder Quadrat"></button>
-      <button class="cf-pill cf-tap" aria-label="Tempo tappen: im Takt klicken oder T drücken" title="Im Takt klicken oder T drücken (mind. 4×). Setzt Tempo und Beat-Lage für diesen Song.">Tap</button>
-      <button class="cf-bpm" aria-label="Tempo-Gefühl umschalten"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
-      <button class="cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
+      <span class="cf-sep"></span>
+      <button class="cf-chip cf-modes" data-open="modes" aria-haspopup="dialog" aria-expanded="false"><small class="cf-modes-k">Auto</small><span class="cf-modes-v"></span></button>
+      <button class="cf-chip cf-bpm" data-open="tempo" aria-haspopup="dialog" aria-expanded="false"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
+      <button class="cf-icon cf-frame" aria-pressed="false" aria-label="Quadrat-Modus">
+        <svg class="cf-i-full" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg>
+        <svg class="cf-i-sq" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x=".75" y=".75" width="12.5" height="12.5" rx="3" stroke-opacity=".35"/></svg>
+      </button>
+      <button class="cf-icon cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
       </button>
     </div>`;
@@ -1063,7 +1121,10 @@
   const $ = (sel) => root.querySelector(sel);
   const canvas = $("canvas");
   const elTitle = $(".cf-title"), elArtist = $(".cf-artist"), elInfo = $(".cf-info");
-  const elMode = $(".cf-mode"), elInt = $(".cf-intensity"), elNote = $(".cf-note");
+  const elInt = $(".cf-intensity"), elIntV = $(".cf-intv"), elNote = $(".cf-note");
+  const tiles = Array.from(root.querySelectorAll(".cf-tile")), ratioButtons = Array.from(root.querySelectorAll(".cf-ratio button"));
+  const elModesK = $(".cf-modes-k"), elModesV = $(".cf-modes-v"), elModesHint = $(".cf-modes-hint"), elDetect = $(".cf-detect");
+  const panels = Array.from(root.querySelectorAll(".cf-panel")), openers = Array.from(root.querySelectorAll("[data-open]"));
   const elSync = $(".cf-syncr"), elSyncV = $(".cf-syncv");
   const elFrame = $(".cf-frame");
   const elBpm = $(".cf-bpm"), elBpmV = $(".cf-bpmv"), elBpmM = $(".cf-bpmm"), elDot = $(".cf-dot");
@@ -1074,16 +1135,69 @@
     segButtons.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.src === settings.source)));
     const active = segButtons.find((b) => b.dataset.src === settings.source);
     if (active && active.offsetWidth) { thumb.style.left = active.offsetLeft + "px"; thumb.style.width = active.offsetWidth + "px"; }
-    elMode.value = settings.mode;
     elInt.value = Math.round(settings.intensity * 100);
     elInt.style.setProperty("--v", elInt.value + "%");
+    elIntV.textContent = elInt.value + " %";
     elSync.value = settings.syncMs;
     elSync.style.setProperty("--v", ((settings.syncMs + 250) / 5) + "%");
     elSyncV.textContent = (settings.syncMs > 0 ? "+" : "") + settings.syncMs + " ms";
     root.classList.toggle("cf-noinfo", !settings.showInfo);
-    elFrame.textContent = settings.frame === "square" ? "Quadrat" : "Vollbild";
-    elFrame.title = settings.frame === "square" ? "Cover bleibt ein Quadrat – klicken für gespiegeltes Vollbild" : "Gespiegeltes Vollbild – klicken, damit das Cover ein Quadrat bleibt";
+    elFrame.setAttribute("aria-pressed", String(settings.frame === "square"));
+    elFrame.title = settings.frame === "square" ? "Quadrat – klicken für gespiegeltes Vollbild" : "Vollbild – klicken, damit das Cover ein Quadrat bleibt";
+    syncModes();
   }
+
+  // mode chip + tiles: which modes are on, which one is running right now
+  function syncModes() {
+    const on = settings.modes, all = on.length === PRESET_KEYS().length;
+    tiles.forEach((t) => {
+      t.setAttribute("aria-pressed", String(on.includes(t.dataset.k)));
+      t.classList.toggle("cf-running", t.dataset.k === state.presetKey && isOpen);
+    });
+    elModesK.textContent = on.length === 1 ? "Fix" : "Auto";
+    elModesV.textContent = (PRESETS[state.presetKey] || PRESETS[on[0]]).label;
+    elModesHint.textContent = on.length === 1 ? "Nur " + PRESETS[on[0]].label + " · Klicken fügt Modi hinzu" : all ? "Auto wechselt zwischen allen Modi" : "Auto wechselt zwischen " + on.length + " Modi";
+  }
+
+  // popover panels
+  let openPanel = null;
+  function setPanel(name) {
+    openPanel = name && name !== openPanel ? name : null;
+    panels.forEach((p) => p.classList.toggle("cf-on", p.dataset.panel === openPanel));
+    openers.forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.open === openPanel)));
+    if (openPanel === "tempo") refreshStatus();
+  }
+  openers.forEach((b) => b.addEventListener("click", () => setPanel(b.dataset.open)));
+  root.addEventListener("pointerdown", (e) => { if (openPanel && !e.target.closest(".cf-panel,[data-open]")) setPanel(null); });
+
+  function setModes(next) {
+    settings.modes = PRESET_KEYS().filter((k) => next.includes(k));
+    saveSettings(); syncModes();
+    if (!settings.modes.includes(state.presetKey)) state.pending = true; // glide home, then start an enabled mode
+  }
+  tiles.forEach((t) => {
+    t.addEventListener("click", () => {
+      const k = t.dataset.k, on = settings.modes;
+      if (on.includes(k)) {
+        if (on.length === 1) { note("Mindestens ein Modus bleibt an"); return; }
+        setModes(on.filter((x) => x !== k));
+      } else setModes(on.concat(k));
+    });
+    t.addEventListener("dblclick", () => {
+      const k = t.dataset.k;
+      const solo = settings.modes.length === 1 && settings.modes[0] === k;
+      setModes(solo ? PRESET_KEYS() : [k]);
+      note(solo ? "Auto: alle Modi" : "Nur " + PRESETS[k].label);
+    });
+  });
+  $(".cf-all").addEventListener("click", () => setModes(PRESET_KEYS()));
+  ratioButtons.forEach((b) => b.addEventListener("click", () => {
+    const uri = audio.uri;
+    if (!uri) return;
+    if (b.dataset.r === "auto") delete tempoOverrides[uri]; else tempoOverrides[uri] = +b.dataset.r;
+    saveTempo(); refreshStatus(); state.pending = true;
+    note(b.dataset.r === "auto" ? "Tempo: automatisch erkannt" : "Tempo für diesen Song fixiert");
+  }));
 
   let noteTimer = 0;
   function note(text) {
@@ -1097,8 +1211,7 @@
     if (settings.source === b.dataset.src) return;
     settings.source = b.dataset.src; saveSettings(); syncControls(); refreshCover(true);
   }));
-  elMode.addEventListener("change", () => { settings.mode = elMode.value; saveSettings(); state.pending = true; });
-  elInt.addEventListener("input", () => { settings.intensity = elInt.value / 100; elInt.style.setProperty("--v", elInt.value + "%"); saveSettings(); });
+  elInt.addEventListener("input", () => { settings.intensity = elInt.value / 100; elInt.style.setProperty("--v", elInt.value + "%"); elIntV.textContent = elInt.value + " %"; saveSettings(); });
   const setSync = (ms) => { settings.syncMs = clamp(Math.round(ms / 10) * 10, -250, 250); saveSettings(); syncControls(); };
   elSync.addEventListener("input", () => setSync(+elSync.value));
   elFrame.addEventListener("click", () => { settings.frame = settings.frame === "square" ? "full" : "square"; saveSettings(); syncControls(); });
@@ -1137,17 +1250,6 @@
   }
   elTap.addEventListener("click", tap);
 
-  elBpm.addEventListener("click", () => {
-    const uri = audio.uri;
-    if (!uri) return;
-    // cycle: Auto -> halbe -> normal -> doppelte -> drittel -> Auto (a tapped setting counts as "fixed" and goes back to Auto)
-    const order = [undefined, 2, 1, 0.5, 3];
-    const cur = tempoOverrides[uri];
-    const next = typeof cur === "object" ? undefined : order[(order.indexOf(cur) + 1) % order.length];
-    if (next === undefined) delete tempoOverrides[uri]; else tempoOverrides[uri] = next;
-    saveTempo(); refreshStatus(); state.pending = true;
-    note(next === undefined ? "Tempo: automatisch erkannt" : "Tempo für diesen Song fixiert");
-  });
   $(".cf-close").addEventListener("click", () => close());
 
   // idle chrome
@@ -1155,7 +1257,7 @@
   function wake() {
     root.classList.remove("cf-idle");
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { if (!root.matches(":focus-within") && !root.querySelector(".cf-controls:hover")) root.classList.add("cf-idle"); else wake(); }, 2600);
+    idleTimer = setTimeout(() => { if (!openPanel && !root.matches(":focus-within") && !root.querySelector(".cf-controls:hover")) root.classList.add("cf-idle"); else wake(); }, 2600);
   }
   root.addEventListener("pointermove", wake);
   root.addEventListener("pointerdown", wake);
@@ -1198,9 +1300,12 @@
 
   // Latched once per cycle, while every point is home – so switching never shows.
   function startCycle(id, len) {
-    let key = settings.mode;
-    if (key === "auto" || !PRESETS[key]) {
-      const pool = state.energySlow > 0.5 ? LOUD_POOL : CALM_POOL;
+    const on = settings.modes;
+    let key = on[0];
+    if (on.length > 1) {
+      // energy decides between the calm and the loud characters – among the ones that are switched on
+      let pool = (state.energySlow > 0.5 ? LOUD_POOL : CALM_POOL).filter((k) => on.includes(k));
+      if (pool.length < 2) pool = on;
       let i = hashStr((audio.uri || "x") + ":" + id) % pool.length;
       if (pool[i] === state.presetKey) i = (i + 1) % pool.length;
       key = pool[i];
@@ -1217,6 +1322,7 @@
     const spins = !rm && state.cycScale > 0.6;
     state.turns = !spins ? 0 : key === "vortex" ? state.dir * (E > 0.7 ? 2 : 1) : E > 0.42 ? state.dir : 0;
     state.lag = rm ? 0.08 : 0.12 + 0.1 * E;
+    syncModes();
   }
 
   function syncPosition(now) {
@@ -1360,11 +1466,12 @@
     const ratio = m === 2 ? "½" : m === 3 ? "⅓" : m === 0.5 ? "2×" : m === 4 ? "¼" : m === 1 ? "1×" : "";
     elDot.classList.toggle("cf-live", live);
     elBpmV.textContent = Math.round(audio.tempo / m) + " BPM";
-    elBpmM.textContent = !live ? "simuliert" : typeof o === "object" ? "tap" : o !== undefined ? ratio + " fix" : m !== 1 ? "auto " + ratio : "auto";
-    elBpm.title = (live
-      ? "Spotify-Analyse: " + audio.describe() + "."
-      : "Keine Audio-Analyse verfügbar – die Bewegung folgt einem simulierten Takt, nicht der echten Musik.")
-      + "\nDer Punkt blinkt auf jedem Beat. Falsch? Klicken: Auto → ½ → 1× → 2× → ⅓, oder mit Tap (T) einklopfen. Wird pro Song gespeichert.";
+    elBpmM.textContent = !live ? "sim" : typeof o === "object" ? "tap" : o !== undefined ? ratio : "";
+    elBpm.title = live ? "Tempo – der Punkt blinkt auf jedem Beat" : "Keine Audio-Analyse – simulierter Takt";
+    const cur = o === undefined ? "auto" : typeof o === "number" ? String(o) : "";
+    ratioButtons.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.r === cur)));
+    elDetect.textContent = live ? audio.describe() : "Keine Spotify-Analyse – simulierter Takt";
+    elDetect.title = elDetect.textContent;
   }
 
   async function onTrack() {
@@ -1402,7 +1509,7 @@
 
   function onKey(e) {
     if (!isOpen) return;
-    if (e.key === "Escape") { e.stopPropagation(); close(); }
+    if (e.key === "Escape") { e.stopPropagation(); if (openPanel) setPanel(null); else close(); }
     else if ((e.key === "t" || e.key === "T") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) { e.stopPropagation(); tap(); }
     else if ((e.key === "[" || e.key === "]") && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) {
       e.stopPropagation();
@@ -1438,6 +1545,7 @@
     isOpen = false;
     cancelAnimationFrame(raf);
     root.classList.remove("cf-open", "cf-idle");
+    setPanel(null);
     glowEl.classList.remove("cf-open");
     document.removeEventListener("keydown", onKey, true);
     button.active = false;

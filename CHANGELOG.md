@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.6 — Modi-Auswahl und neue Steuerung
+- Jeder Modus lässt sich für Auto an- und abschalten. Ein Doppelklick lässt nur einen Modus laufen, die Auswahl wird gespeichert.
+- Die alte Einstellung für einen festen Modus wird übernommen.
+- Auto wählt nach Energie unter den aktiven Modi.
+- Neue Steuerung: eine schlanke Leiste mit Quelle, Modi-Chip (zeigt den laufenden Modus), BPM-Chip mit Beat-Punkt, Vollbild/Quadrat als Symbol und Schließen.
+- Modi-Panel mit Kacheln und Intensität. Tempo-Panel mit Erkennung, Verhältnis, Tap-Fläche und Sync.
+- `Esc` schließt zuerst das Panel. Solange ein Panel offen ist, blendet sich die Steuerung nicht aus.
+- docs/modi-ideen.md: zwölf Konzepte für neue Modi.
+
 ## v2.5 — Beat-Raster-Prüfung
 - Das Tempo kommt aus der mittleren Schlaglänge des Rasters statt aus Spotifys Kopfzahl.
 - Dreiertakt (3/4, 6/8) wird erkannt, auch wenn Spotify 4/4 meldet, und nie halbiert.

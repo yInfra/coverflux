@@ -16,7 +16,7 @@ await page.waitForTimeout(2500);
 async function shot(name, { mode, frame, u }) {
   await page.evaluate(({ mode, frame }) => {
     const C = window.Coverflux;
-    C.settings.frame = frame; C.settings.mode = mode; C.state.pending = true;
+    C.settings.frame = frame; C.settings.modes = [mode]; C.state.pending = true;
     document.querySelector("#coverflux").classList.add("cf-idle"); // hide the chrome
   }, { mode, frame });
   await page.waitForTimeout(2800);
