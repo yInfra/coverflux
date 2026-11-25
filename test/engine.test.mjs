@@ -71,3 +71,47 @@ test("output has Spotify's analysis shape", () => {
   assert.equal(g.timbre.length, 12);
   assert.equal(g.pitches.length, 12);
 });
+
+// live tracking: feed audio in 100 ms chunks like a microphone would, ask for the grid every 0.5 s
+function liveRun(x, upto) {
+  const live = engine.createLive(), chunk = Math.round(SR * 0.1);
+  let a = null, next = 0.5;
+  for (let o = 0; o < Math.min(x.length, upto * SR); o += chunk) {
+    live.push(x.subarray(o, o + chunk));
+    if (live.now() >= next) { a = live.update() || a; next += 0.5; }
+  }
+  return { a, live };
+}
+
+test("live: locks onto 120 BPM within seconds and predicts the next beats", () => {
+  const { x, beats } = drums({ bpm: 120, bars: 16 });
+  const { a, live } = liveRun(x, 20);
+  assert.ok(a, "has a grid");
+  assert.ok(Math.abs(live.tempo - 120) < 2, `tempo ${live.tempo}`);
+  const tNow = live.now(), future = a.beats.map((b) => b.start).filter((t) => t > tNow && t < tNow + 4);
+  const truth = beats.filter((t) => t > tNow && t < tNow + 4);
+  assert.ok(near(future, truth, 0.06) >= truth.length - 1, `predicted ${future.map((t) => t.toFixed(2))} vs ${truth.map((t) => t.toFixed(2))}`);
+});
+
+test("live: committed beats never move between updates", () => {
+  const { x } = drums({ bpm: 96, bars: 12 });
+  const live = engine.createLive(), chunk = Math.round(SR * 0.1);
+  let prev = null, moved = 0;
+  for (let o = 0, next = 0.5; o < x.length; o += chunk) {
+    live.push(x.subarray(o, o + chunk));
+    if (live.now() >= next) {
+      next += 0.5;
+      const a = live.update(); if (!a) continue;
+      const past = a.beats.filter((b) => b.start < live.now() - 0.6).map((b) => b.start);
+      if (prev) for (let i = 0; i < Math.min(prev.length, past.length); i++) if (Math.abs(prev[i] - past[i]) > 1e-6) moved++;
+      prev = past;
+    }
+  }
+  assert.equal(moved, 0);
+});
+
+test("live: 160 BPM is felt at 80 on kick and snare", () => {
+  const { x } = drums({ bpm: 160, bars: 16 });
+  const { live } = liveRun(x, 20);
+  assert.ok(Math.abs(live.tempo - 80) < 2, `tempo ${live.tempo}`);
+});

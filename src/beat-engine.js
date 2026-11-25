@@ -88,23 +88,28 @@ function coverfluxBeatFactory() {
   }
 
   // ---- tempo: autocorrelation, comb over multiples, log-normal prior around 120 BPM ----
-  function tempo(env) {
+  // center (optional, BPM at tracking level): live tracking keeps to the tempo family it already follows
+  function tempo(env, center) {
     const T = env.length, minL = Math.floor(FPS * 60 / 200), maxL = Math.ceil(FPS * 60 / 50);
     const ac = new Float32Array(maxL * 4 + 2);
     for (let L = 1; L < ac.length; L++) { let s = 0; for (let t = L; t < T; t++) s += env[t] * env[t - L]; ac[L] = s / (T - L); }
     const at = (L) => { const i = Math.floor(L), f = L - i; return i + 1 < ac.length ? ac[i] * (1 - f) + ac[i + 1] * f : 0; };
     let best = minL, bestS = -1;
-    const score = new Float32Array(maxL + 1);
+    const score = new Float32Array(maxL + 1), priors = new Float32Array(maxL + 1);
+    const priorAt = (L) => priors[L] || 1;
     for (let L = minL; L <= maxL; L++) {
       // the whole metrical family: subdivisions (L/2, L/4) and groupings (2L, 4L) must line up too
       const comb = at(L) + 0.5 * (at(2 * L) + at(L / 2)) + 0.25 * (at(4 * L) + (L / 4 >= 2 ? at(L / 4) : 0));
-      const bpm = (60 * FPS) / L, prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 130) / 0.7, 2));
-      score[L] = comb * prior;
+      const bpm = (60 * FPS) / L;
+      let prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 130) / 0.7, 2));
+      if (center) { const g = (c) => Math.exp(-0.5 * Math.pow(Math.log2(bpm / c) / 0.08, 2)); prior *= 0.35 + 2 * Math.max(g(center), g(center * 2), g(center / 2)); }
+      score[L] = comb * prior; priors[L] = prior;
       if (score[L] > bestS) { bestS = score[L]; best = L; }
     }
     // parabolic refinement
     let P = best;
     if (best > minL && best < maxL) { const a = score[best - 1], b = score[best], c = score[best + 1], d = a - 2 * b + c; if (d < 0) P = best + (0.5 * (a - c)) / d; }
+    tempo.lastComb = bestS > 0 ? score[best] / Math.max(1e-6, priorAt(best)) : 0;
     return P; // period in frames
   }
 
@@ -355,6 +360,163 @@ function coverfluxBeatFactory() {
     };
   }
 
+  // ---- live (causal) tracking for microphone / system audio ----
+  // push(mono22k) as audio arrives; update() every ~0.5 s re-estimates tempo/phase on the last 12 s and returns an
+  // analysis in Spotify's shape on the stream clock (seconds since the first sample). Past beats are committed and
+  // never move, upcoming beats are predicted – so beat indices stay stable and the visuals never jump.
+  function createLive() {
+    const HIST = Math.round(FPS * 16);
+    let pending = new Float32Array(0), frameIdx = 0;
+    const envR = [], lowR = [], midR = [], rmsR = [], chromaR = [];
+    let prev1 = null, prev2 = null;
+    const re = new Float32Array(N), im = new Float32Array(N), bands = new Float32Array(NB), chroma = new Float32Array(12);
+    const committed = [];                    // beat times (s) that have passed
+    let grid = null;                         // { anchor: beat time (s), period: s }
+    let candidate = null, candHits = 0, lastConf = 0;
+    const segs = [];
+
+    function frame(x, o) {
+      let e = 0;
+      for (let i = 0; i < N; i++) { const v = x[o + i]; e += v * v; re[i] = v * win[i]; im[i] = 0; }
+      fft(re, im);
+      bands.fill(0); chroma.fill(0);
+      for (let k = 1; k < N / 2; k++) {
+        const m = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+        if (bandOf[k] >= 0) bands[bandOf[k]] += m;
+        if (chromaOf[k] >= 0) chroma[chromaOf[k]] += m * m;
+      }
+      const cur = new Float32Array(NB);
+      for (let b = 0; b < NB; b++) cur[b] = Math.log1p(100 * bands[b]);
+      let s = 0, l = 0, md = 0;
+      if (prev2) for (let b = 0; b < NB; b++) {
+        const p = Math.max(prev2[Math.max(0, b - 1)], prev2[b], prev2[Math.min(NB - 1, b + 1)]), d = cur[b] - p;
+        if (d > 0) { s += d; if (b < LOW_BANDS) l += d; else if (b < MID_END) md += d; }
+      }
+      prev2 = prev1; prev1 = cur;
+      envR.push(s); lowR.push(l); midR.push(md); rmsR.push(10 * Math.log10(e / N + 1e-10)); chromaR.push(Array.from(chroma));
+      if (envR.length > HIST) { envR.shift(); lowR.shift(); midR.shift(); rmsR.shift(); chromaR.shift(); }
+      frameIdx++;
+    }
+
+    function push(samples) {
+      const all = new Float32Array(pending.length + samples.length);
+      all.set(pending); all.set(samples, pending.length);
+      let o = 0;
+      while (o + N <= all.length) { frame(all, o); o += HOP; }
+      pending = all.slice(o);
+    }
+
+    const now = () => (Math.max(0, frameIdx - 1) * HOP + N / 2) / SR; // stream time of the newest frame centre
+    const wrap = (x, p) => ((x % p) + 1.5 * p) % p - 0.5 * p;
+
+    function estimate(center) {
+      if (envR.length < FPS * 4) return null;
+      const len = envR.length;
+      const env = normalize(Float32Array.from(envR)), lo = normalize(Float32Array.from(lowR)), mi = normalize(Float32Array.from(midR));
+      let P = tempo(env, center || 0);
+      const comb = tempo.lastComb;
+      let beats = refine(track(env, P), env);
+      if (beats.length < 6) return null;
+      let parity = 0;
+      if ((60 * FPS) / P > 140) {
+        // felt pulse <= 140: find the bar lines on the fast grid (harmony changes + bass), keep beats 1 and 3
+        const chroma = new Float32Array(len * 12);
+        for (let i = 0; i < len; i++) for (let k = 0; k < 12; k++) chroma[i * 12 + k] = chromaR[i][k];
+        const Sw = { T: len, chroma, bands: new Float32Array(len * NB) };
+        const D = downbeats(beatFeatures(Sw, { env, low: lo, mid: mi }, beats));
+        // 12 s are few bars: only trust a triple meter when it clearly wins
+        const triple = D.meter === 3 && D.byMeter[3] > 1.5 * Math.max(0.05, D.byMeter[4]);
+        const step = triple ? 3 : 2, phase = triple ? D.phase : (D.meter === 4 ? D.phase : 0) % 2;
+        beats = beats.filter((_, i) => (((i - phase) % step) + step) % step === 0);
+        P *= step; parity = D.strength;
+      }
+      const recent = beats.slice(-10), d = [];
+      for (let i = 1; i < recent.length; i++) d.push(recent[i] - recent[i - 1]);
+      d.sort((x, y) => x - y);
+      const per = d.length ? d[d.length >> 1] : P;
+      // least-squares anchor on the last beats (the newest beat alone sits where the tracker has least context)
+      const K = recent.length - 1;
+      let acc = 0; for (let k = 0; k <= K; k++) acc += recent[k] + (K - k) * per;
+      const anchorFrame = acc / (K + 1);
+      // confidence: onset strength on the beats vs. half-way between them
+      let on = 0, off = 0;
+      for (const t of recent) { on += env[t] || 0; off += env[Math.round(t + per / 2)] || 0; }
+      return { anchor: now() - (len - 1 - anchorFrame) / FPS, period: per / FPS, conf: on / Math.max(1e-3, on + off), parity, comb };
+    }
+
+    function update() {
+      const tNow = now();
+      // two estimates: one that keeps to the current tempo family (smooth tracking) and a free one (escape hatch
+      // out of a wrong lock, e.g. on a beatless intro or after a real tempo change)
+      const free = estimate(0);
+      const est = grid && free ? estimate(60 / grid.period) : free;
+      if (est && est.conf > 0.55) {
+        lastConf = est.conf;
+        if (!grid) grid = { anchor: est.anchor, period: est.period, trust: est.conf };
+        else {
+          const ratio = est.period / grid.period;
+          const pred = grid.anchor + Math.round((est.anchor - grid.anchor) / grid.period) * grid.period;
+          const perr = wrap(est.anchor - pred, grid.period);
+          if (Math.abs(ratio - 1) < 0.05 && Math.abs(perr) < 0.25 * grid.period) {
+            // phase-locked loop (PI): ease period and phase towards the estimate; a phase error that keeps the same
+            // sign means the period is off, so it also nudges the period (no steady-state lag)
+            grid.period += 0.2 * (est.period - grid.period);
+            grid.period *= 1 + 0.08 * perr / grid.period;
+            grid.anchor = pred + 0.3 * perr;
+            grid.trust += 0.1 * (est.conf - grid.trust);
+          } else grid.trust += 0.1 * (0.4 - grid.trust); // estimates disagree with the grid: trust it less
+        }
+        // switch only when the free estimate is a clearly better explanation, consistently for ~5 s (12 s for 4:3 / 3:2)
+        const sameFamily = free && grid && [0.5, 1, 2].some((m) => Math.abs(free.period / (grid.period * m) - 1) < 0.05) &&
+          Math.abs(wrap(free.anchor - grid.anchor, grid.period)) < 0.25 * grid.period;
+        if (free && !sameFamily && free.conf > 0.55 && free.comb > 1.12 * est.comb) {
+          if (candidate && Math.abs(free.period / candidate.period - 1) < 0.05 && Math.abs(wrap(free.anchor - candidate.anchor, free.period)) < 0.15 * free.period) {
+            // 4:3 and 3:2 are the classic tempo confusions in short windows – those need much more evidence
+            const r = free.period / grid.period, odd = [4 / 3, 3 / 4, 3 / 2, 2 / 3, 8 / 3, 3 / 8].some((q) => Math.abs(r / q - 1) < 0.04);
+            // a grid built on weak evidence (e.g. a beatless intro) gives way quickly, a confirmed groove does not
+            const need = grid.trust < 0.66 ? 3 : odd ? 24 : 10;
+            if (++candHits >= need) { grid = { anchor: free.anchor, period: free.period, trust: free.conf }; candidate = null; candHits = 0; }
+            else candidate = { anchor: free.anchor, period: free.period };
+          } else { candidate = { anchor: free.anchor, period: free.period }; candHits = 1; }
+        } else if (sameFamily) { candidate = null; candHits = 0; }
+      }
+      if (!grid) return null;
+      // commit beats up to now, predict 30 s ahead
+      let next = committed.length ? committed[committed.length - 1] + grid.period : grid.anchor - Math.floor((grid.anchor - Math.max(0, tNow - 12)) / grid.period) * grid.period;
+      if (committed.length) {
+        // land the continuation on the current grid without moving committed beats
+        const g = grid.anchor + Math.round((next - grid.anchor) / grid.period) * grid.period;
+        if (Math.abs(g - next) < 0.35 * grid.period) next = next + 0.5 * (g - next);
+      }
+      while (next <= tNow) { committed.push(next); next += grid.period; }
+      const beatsT = committed.slice();
+      for (let t = next; t < tNow + 30; t += grid.period) beatsT.push(t);
+      // loudness segments from recent onsets (energy / accents for the visuals)
+      const t0 = tNow - envR.length / FPS, lastSeg = segs.length ? segs[segs.length - 1].start : -1;
+      const envN = normalize(Float32Array.from(envR));
+      for (let i = 2; i < envN.length - 2; i++) {
+        const t = t0 + (i * HOP + N / 2) / SR;
+        if (t <= lastSeg + 0.06 || envN[i] < 0.8 || envN[i] < envN[i - 1] || envN[i] < envN[i + 1]) continue;
+        let mx = -100; for (let j = i; j < Math.min(envN.length, i + 12); j++) mx = Math.max(mx, rmsR[j]);
+        const c = chromaR[i], cm = Math.max(...c) || 1;
+        segs.push({ start: r4(t), duration: 0.12, loudness_start: r2(rmsR[Math.max(0, i - 2)]), loudness_max: r2(mx), loudness_max_time: 0.02, timbre: new Array(12).fill(0), pitches: c.map((v) => r2(v / cm)) });
+      }
+      while (segs.length > 1500) segs.shift();
+      for (let i = 0; i + 1 < segs.length; i++) segs[i].duration = r4(Math.max(0.02, segs[i + 1].start - segs[i].start));
+      const beats = beatsT.map((t, i) => ({ start: r4(t), duration: r4((beatsT[i + 1] ?? t + grid.period) - t), confidence: 0.6 }));
+      const bars = [];
+      for (let i = 0; i < beats.length; i += 4) bars.push({ start: beats[i].start, duration: r4(4 * grid.period), confidence: 0.5 });
+      return {
+        source: "coverflux", live: true, version: 1,
+        track: { duration: r4(tNow + 3600), tempo: r2(60 / grid.period), time_signature: 4, felt_per_bar: 4, confidence: r2(lastConf) },
+        beats, bars, segments: segs.length ? segs.slice() : [{ start: 0, duration: tNow + 3600, loudness_start: -60, loudness_max: -60, loudness_max_time: 0 }],
+        sections: [{ start: 0, duration: r4(tNow + 3600), loudness: r2(mean(rmsR)), confidence: 0.5 }],
+      };
+    }
+
+    return { push, update, now, get tempo() { return grid ? 60 / grid.period : 0; }, get confidence() { return lastConf; } };
+  }
+
   // linear resampler + downmix, so callers can hand in any AudioBuffer-like channel data
   function toMono22k(channels, rate) {
     const len = channels[0].length, mono = new Float32Array(len);
@@ -365,6 +527,6 @@ function coverfluxBeatFactory() {
     return out;
   }
 
-  return { analyze, align, toMono22k, SR };
+  return { analyze, align, createLive, toMono22k, SR };
 }
 if (typeof module === "object" && module.exports) module.exports = coverfluxBeatFactory;
