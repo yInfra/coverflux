@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
-// DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art away and back – one breath every two bars.
-// VERSION: 2.0.0
+// DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
+// VERSION: 2.1.0
 
 (function Coverflux() {
   "use strict";
@@ -33,25 +33,27 @@
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
   function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "shatter", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
   const PRESETS = {
-    liquid:  { label: "Liquid",  mode: 0, fill: 1.0 },
-    vortex:  { label: "Vortex",  mode: 1, fill: 1.2 },
-    ripple:  { label: "Ripple",  mode: 2, fill: 1.3 },
-    shatter: { label: "Shatter", mode: 3, fill: 1.5 },
-    prism:   { label: "Prism",   mode: 4, fill: 1.6 },
+    liquid:  { label: "Liquid",  mode: 0, fill: 3.0 },
+    vortex:  { label: "Vortex",  mode: 1, fill: 3.0 },
+    ripple:  { label: "Ripple",  mode: 2, fill: 1.6 },
+    shatter: { label: "Shatter", mode: 3, fill: 2.0 },
+    prism:   { label: "Prism",   mode: 4, fill: 1.8 },
     kaleido: { label: "Kaleido", mode: 5, fill: 3.0 },
     mandala: { label: "Mandala", mode: 6, fill: 3.0 },
     fractal: { label: "Fractal", mode: 7, fill: 3.0 },
-    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.12 },
+    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.15 },
   };
   // Auto mode picks from these depending on the energy of the current song section.
-  const CALM_POOL = ["liquid", "ripple", "kaleido", "vortex", "mandala"];
-  const LOUD_POOL = ["fractal", "kaleido", "prism", "shatter", "tunnel", "mandala", "vortex", "liquid", "ripple"];
+  const CALM_POOL = ["liquid", "ripple", "kaleido", "mandala", "prism"];
+  const LOUD_POOL = ["kaleido", "fractal", "vortex", "shatter", "tunnel", "mandala", "liquid", "prism"];
+  const CYCLE_BARS = 8; // one full loop away from the cover and back onto it
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                             */
   /* ------------------------------------------------------------------ */
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
   const lerp = (a, b, t) => a + (b - a) * t;
+  const smooth01 = (x) => { const t = clamp(x); return t * t * (3 - 2 * t); };
   const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
   const hashStr = (s) => {
     let h = 2166136261;
@@ -193,6 +195,41 @@
       for (let i = 0; i < acc.length; i++) acc[i] = clamp(acc[i] / Math.max(p95, 1e-3));
       this.acc = acc;
       this.autoMult = this.synthetic ? 1 : this.detectFeel();
+      this._fa = null; this._csi = 0;
+    }
+
+    // Section starts in felt beats (cached per tempo feel).
+    feltAnchors(m) {
+      if (this._fa && this._faM === m) return this._fa;
+      const arr = [];
+      for (const b of this.secAnchor) { const f = Math.round((b - this.d0) / m); if (!arr.length || f > arr[arr.length - 1]) arr.push(f); }
+      if (!arr.length || arr[0] > 0) arr.unshift(0);
+      this._fa = { arr, total: (this.beats.length - this.d0) / m }; this._faM = m;
+      return this._fa;
+    }
+
+    // Splits every section into ~CYCLE_BARS-bar cycles (whole bars, last one ends on the next section start).
+    // u = beat-stepped progress 0..1: each beat pushes forward, eased by kE.
+    cycleAt(F, m, kE) {
+      const { arr, total } = this.feltAnchors(m);
+      const bpb = this.bpb;
+      if (F < arr[0]) return { id: "pre", u: 0, len: 4 * CYCLE_BARS };
+      let si = this._csi || 0;
+      if (si >= arr.length || arr[si] > F) si = 0;
+      while (si < arr.length - 1 && arr[si + 1] <= F) si++;
+      this._csi = si;
+      const Fa = arr[si], Fb = si < arr.length - 1 ? arr[si + 1] : Math.max(total, F + 1);
+      const Nb = Math.max(1, Math.round((Fb - Fa) / bpb));
+      const n = Math.max(1, Math.round(Nb / CYCLE_BARS));
+      const rel = (F - Fa) / bpb;
+      const edge = (k) => (k >= n ? (Fb - Fa) / bpb : Math.round((k * Nb) / n));
+      let k = clamp(Math.floor((rel * n) / Nb), 0, n - 1);
+      while (k > 0 && rel < edge(k)) k--;
+      while (k < n - 1 && rel >= edge(k + 1)) k++;
+      const start = Fa + edge(k) * bpb, len = Math.max(1, (edge(k + 1) - edge(k)) * bpb);
+      const local = clamp(F - start, 0, len);
+      const kk = Math.floor(local), fr = local - kk;
+      return { id: si + ":" + k, u: clamp((kk + 1 - Math.pow(1 - fr, kE)) / len), len };
     }
 
     // Spotify often reports double time for songs that *feel* half as fast.
@@ -286,23 +323,24 @@
   in vec2 aPos; out vec2 vUv;
   void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }`;
 
-  // Scene: every pixel is a point that travels along a deterministic path away from its place in the
-  // cover and back. uA = how far along (0 = the untouched original). No frame-to-frame accumulation,
-  // so nothing drifts and nothing jitters; uPrev only adds a short motion trail.
+  // Scene: every pixel is a point with its own clock. One cycle (uPhi 0→1, ~8 bars) carries each point along a
+  // closed loop – a full turn, one mirror period of drift, one Droste period, an orbit – that only ever moves
+  // forward and lands exactly where it started. Points start and land at slightly different moments (lag field),
+  // which is what bends the picture into spirals, streams and folds. Nothing accumulates, nothing rewinds.
   const SCENE = `#version 300 es
   precision highp float;
   in vec2 vUv; out vec4 o;
   uniform sampler2D uImgA, uImgB, uPrev;
   uniform vec2 uRes;
-  uniform float uMix, uSquare, uA, uFill, uFlow, uPulse, uU, uSeed, uSegs, uHue, uTrail, uGlow, uDisp, uBloom;
+  uniform float uAct, uMix, uSquare, uPhi, uDepth, uGate, uLag, uFillK, uFlow, uPulse, uSeed, uSegs, uHue, uTrail, uGlow, uDisp, uTurns, uDir;
   uniform int uMode;
-  const float TAU = 6.2831853;
+  const float TAU = 6.2831853, PI = 3.14159265;
   mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,s,-s,c); }
   vec2 hash22(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*vec3(.1031,.1030,.0973)); p3 += dot(p3, p3.yzx+33.33); return fract((p3.xx+p3.yz)*p3.zy); }
   vec3 hueShift(vec3 c, float a){ const vec3 k = vec3(0.57735); float ca=cos(a); return c*ca + cross(k,c)*sin(a) + k*dot(k,c)*(1.0-ca); }
   vec2 clampLen(vec2 v, float m){ float l = length(v); return l > m ? v*(m/l) : v; }
 
-  vec2 gGx, gGy; float gShade, gSpec, gEdge, gRim; vec2 gDispV;
+  vec2 gGx, gGy; float gShade, gSpec, gEdge, gRim, gE, gF, gDiag; vec2 gDispV, gMask;
 
   vec2 mirror(vec2 q){ return 1.0 - abs(1.0 - mod(q, 2.0)); }
   vec3 img(vec2 m){ return mix(textureGrad(uImgA, m, gGx, gGy).rgb, textureGrad(uImgB, m, gGx, gGy).rgb, uMix); }
@@ -310,8 +348,9 @@
   // cover space q: [0,1]^2 is the cover square. Outside: blurred ambient – unless fill spreads the sharp mirrored cover.
   vec3 cover(vec2 q, float fill){
     vec2 m = mirror(q);
-    float d = max(abs(q.x-0.5), abs(q.y-0.5)) - 0.5;
-    float soft = 0.0018 + 0.07*clamp(fill, 0.0, 1.0);
+    vec2 qm = q + gMask;
+    float d = max(abs(qm.x-0.5), abs(qm.y-0.5)) - 0.5;
+    float soft = 0.002 + 0.12*clamp(fill, 0.0, 1.0);
     float mask = smoothstep(-soft, soft, d - fill);
     vec3 c = img(m);
     if (mask > 0.0) {
@@ -325,11 +364,19 @@
     float lim = 6.0/(uRes.y*uSquare);
     gGx = clampLen(gx/uSquare, lim); gGy = clampLen(gy/uSquare, lim);
     vec2 q = w/uSquare + 0.5;
-    vec2 dv = (gDispV + (q-0.5)) * uDisp;
-    vec3 c = vec3(cover(q+dv, fill).r, cover(q, fill).g, cover(q-dv, fill).b);
+    vec3 c;
+    if (uDisp > 0.0005) {
+      vec2 dv = (gDispV + (q-0.5)*0.15*gE)*uDisp;
+      c = vec3(cover(q+dv, fill).r, cover(q, fill).g, cover(q-dv, fill).b);
+    } else c = cover(q, fill);
     if (uGlow > 0.001) c += max(imgLod(mirror(q), 3.5) - 0.55, 0.0) * uGlow;
     return c;
   }
+
+  // a point's own progress through the cycle: starts later and lands later the larger lam is, always within the cycle
+  float prog(float lam){ float x = clamp((uPhi - uLag*lam)/(1.0 - uLag), 0.0, 1.0); return x*x*x*(x*(x*6.0-15.0)+10.0); }
+  float envOf(float x){ return smoothstep(0.0, 0.3, x)*(1.0 - smoothstep(0.7, 1.0, x)); }
+  float sweep(vec2 p, float ang){ return clamp(0.5 + 0.5*dot(p, vec2(cos(ang), sin(ang)))/gDiag, 0.0, 1.0); }
 
   /* ---- morph characters ---- */
   vec2 liquidRaw(vec2 p, float A){
@@ -341,23 +388,31 @@
     w += A*0.045*vec2(sin(w.y*9.0 + t*1.3), cos(w.x*8.0 - t*1.1));
     return w;
   }
-  // anchored at the centre so the picture never slides off in one direction
-  vec2 wLiquid(vec2 p, float A){ return liquidRaw(p, A) - liquidRaw(vec2(0.0), A); }
-
-  vec2 wVortex(vec2 p, float A){
-    float t = uFlow*0.3 + uSeed; float dir = sin(uSeed*7.0) > 0.0 ? 1.0 : -1.0;
-    float r2 = dot(p,p);
-    vec2 w = rot(dir*A*(6.5*exp(-r2*2.4) + 0.9*exp(-sqrt(r2)*1.2)))*p;
-    for (int k=0; k<2; k++){
-      float ph = t*0.35 + float(k)*3.14159 + uSeed;
-      vec2 c = vec2(0.55*cos(ph), 0.34*sin(ph*1.3));
-      vec2 d = w - c;
-      w = c + rot(-dir*A*4.0*exp(-dot(d,d)*10.0))*d;
-    }
-    return w * (1.0 - 0.2*A*exp(-r2*3.0));
+  // marble stream: the whole mirrored plane drifts one full period in one direction, each region on its own clock
+  vec2 mLiquid(vec2 p){
+    float lam = clamp(0.5 + 0.22*sin(p.x*2.3 + uSeed) + 0.16*sin(p.y*2.9 - uSeed*1.7), 0.0, 1.0);
+    float ph = prog(lam);
+    gE = envOf(ph)*uDepth;
+    float drift = abs(uTurns) > 0.5 ? 1.0 : 0.0;
+    gF = max(gE*1.4, drift*sin(PI*ph));
+    float da = floor(fract(uSeed*0.37)*8.0);   // one of 8 lattice directions, so a full drift is exactly one mirror period
+    vec2 dir = vec2(cos(da*PI*0.25), sin(da*PI*0.25)); dir = floor(dir*1.5 + 0.5)/max(abs(floor(dir.x*1.5+0.5)), max(abs(floor(dir.y*1.5+0.5)), 1.0));
+    gMask = dir*(drift*ph*2.0);          // the cover square travels with the drift and lands one mirror period on
+    return liquidRaw(p, gE) - liquidRaw(vec2(0.0), gE) - dir*(drift*ph*2.0*uSquare);
   }
-
-  vec2 wWater(vec2 p, float A){
+  // vortex: every ring makes the same number of full turns, the eye leads, the rim catches up
+  vec2 mVortex(vec2 p){
+    float r = length(p);
+    float ph = prog(smoothstep(0.0, 1.0, r/gDiag));
+    gE = envOf(ph)*uDepth;
+    gF = max(gE, sin(PI*ph)*step(0.5, abs(uTurns)));
+    vec2 w = rot(TAU*uTurns*ph)*p;
+    return w * (1.0 - 0.32*gE*exp(-r*r*5.0));
+  }
+  // water: the surface sweeps in from one side and leaves on the other
+  vec2 mWater(vec2 p){
+    float ph = prog(sweep(p, uSeed*1.7));
+    float A = envOf(ph)*uDepth; gE = A; gF = A*1.5;
     float t = uFlow*0.55 + uSeed;
     vec2 g = vec2(0.0);
     for (int i=0; i<7; i++){ float fi = float(i);
@@ -385,117 +440,142 @@
     }
     id = ip + bo; ctr = ip + bp; edge = d2 - d1;
   }
-
-  vec2 wShatter(vec2 p, float A){
+  // shatter: each shard spins a full turn and flies one orbit on its own clock, then clicks back into place
+  vec2 mShatter(vec2 p){
     float sc = 3.0 + 1.6*fract(uSeed*0.37);
     vec2 id, ctr; float e;
     voronoi(p*sc, floor(uSeed*10.0), id, ctr, e);
-    vec2 h = hash22(id + uSeed*3.7) - 0.5;
+    vec2 h = hash22(id + uSeed*3.7);
     vec2 c = ctr/sc;
-    gEdge = (1.0 - smoothstep(0.0, 0.05, e)) * smoothstep(0.0, 0.18, A);
-    gRim = (1.0 - smoothstep(0.05, 0.09, e)) * smoothstep(0.03, 0.06, e) * smoothstep(0.0, 0.25, A);
-    gDispV = h*1.2;
-    return c + rot(h.x*1.8*A)*(p - c)*(1.0 + h.y*0.7*A) + h*0.5*A;
+    float ph = prog(clamp(0.65*h.x + 0.35*length(c)/gDiag, 0.0, 1.0));
+    float s = sin(PI*ph);
+    gE = envOf(ph)*uDepth;
+    float th0 = h.y*TAU;
+    float R = (0.04 + 0.16*uDepth)*(0.4 + h.x);
+    vec2 orbit = R*(vec2(cos(th0 + TAU*ph), sin(th0 + TAU*ph)) - vec2(cos(th0), sin(th0)));
+    float ang = TAU*uTurns*(h.y > 0.5 ? 1.0 : -1.0)*ph + 0.5*gE*(h.x - 0.5);
+    float crack = clamp(max(abs(uTurns)*s, gE*3.0), 0.0, 1.0)*uGate;
+    gEdge = (1.0 - smoothstep(0.0, 0.04, e))*crack;
+    gRim = (1.0 - smoothstep(0.04, 0.08, e))*smoothstep(0.02, 0.05, e)*crack;
+    gDispV = (h - 0.5)*1.2;
+    gF = max(gE*1.5, s);
+    return c + rot(ang)*(p - c - orbit)*(1.0 + 0.3*gE*(h.y - 0.5));
+  }
+  // prism: fluted glass – straight refracting ribs with rainbow edges, slowly turning a quarter
+  vec2 mPrism(vec2 p){
+    float an = uSeed*1.3 + uDir*0.5*PI*uPhi;
+    vec2 n = vec2(cos(an), sin(an)), t2 = vec2(-n.y, n.x);
+    float ph = prog(sweep(p, an + 0.5*PI));
+    gE = envOf(ph)*uDepth;
+    float freq = 6.0 + 4.0*fract(uSeed*0.61);
+    float tt = dot(p, n)*freq - uFlow*0.25;
+    float f = fract(tt) - 0.5;
+    float aa = fwidth(tt)*1.5;
+    float fs = f*(1.0 - smoothstep(0.5 - aa, 0.5, abs(f)));
+    float lens = sin(dot(p, t2)*2.2 + uFlow*0.3);
+    gDispV = n*fs*gE*1.2;
+    gShade = 1.0 + fs*0.55*gE;
+    gRim = smoothstep(0.36, 0.5, abs(f))*smoothstep(0.0, 0.15, gE)*0.8;
+    gF = gE*1.4;
+    return p + n*(fs*1.4/freq + lens*0.05)*gE;
   }
 
-  vec2 wPrism(vec2 p, float A){
-    float sp = uFlow*0.04;
-    vec2 id, ctr; float e;
-    voronoi(rot(sp)*p*2.3, 7.0 + floor(uSeed*10.0), id, ctr, e);
-    vec2 n = hash22(id*1.37 + 2.0) - 0.5;
-    vec2 c = rot(-sp)*(ctr/2.3);
-    gShade = 1.0 + dot(n, vec2(0.7))*0.8*A;
-    gRim = (1.0 - smoothstep(0.0, 0.035, e)) * smoothstep(0.0, 0.2, A);
-    gDispV = n*3.0;
-    return p + n*A*0.34 + (p - c)*A*0.35*(n.y + 0.2);
-  }
-
-  vec2 kfold(vec2 p, float N, float spin){
-    float r = length(p); float a = atan(p.y, p.x) + spin;
+  vec2 kfold(vec2 q, float N, float off){
+    float r = length(q); float a = atan(q.y, q.x);
     float seg = TAU/N; a = mod(a, seg); a = abs(a - 0.5*seg);
-    a += uSeed*0.53 + 0.35*sin(uFlow*TAU/16.0);
+    a += off;
     return r*vec2(cos(a), sin(a));
   }
-  vec2 wKaleido(vec2 p, float A){
-    vec2 k = kfold(p, uSegs, uFlow*0.09);
-    k *= 0.84 + 0.1*sin(uFlow*TAU/8.0);
-    return rot(A*0.7*length(p))*k;
+  // kaleido / mandala: every point slides from its own place to its mirrored place – folding spreads outward from
+  // the centre, and unfolds in the same outward order. The pattern keeps turning forward the whole time.
+  vec2 mKaleido(vec2 p, bool mandala){
+    float r = length(p);
+    float ph = prog(clamp(r/gDiag, 0.0, 1.0));
+    float en = envOf(ph);
+    gE = en*uDepth;
+    float b = en*clamp(0.45 + uDepth*0.9, 0.0, 1.0);
+    float chi = uDir*0.5*PI*uPhi;
+    float off = uSeed*0.53 + uDir*PI*0.35*uPhi + 0.06*sin(uFlow*TAU/8.0);
+    vec2 k = rot(chi)*kfold(rot(-chi)*p, uSegs, off);
+    if (mandala) {
+      float rk = length(k) + 0.015; float ak = atan(k.y, k.x);
+      float m = (log(rk) + uFlow*0.12)/1.1;
+      float tri = 1.0 - abs(1.0 - mod(m, 2.0));
+      ak += 0.3*sin(m*PI);
+      k = 0.12*exp(tri*1.1)*vec2(cos(ak), sin(ak));
+    } else {
+      k *= 1.0 - 0.14*b;
+      k = rot(0.55*gE*r)*k;
+    }
+    gF = b;
+    return mix(p, k, b);
   }
-  vec2 wMandala(vec2 p, float A){
-    vec2 k = kfold(p, uSegs, -uFlow*0.07);
-    float r = max(length(k), 1e-4); float a = atan(k.y, k.x);
-    float m = (log(r) + uFlow*0.16)/1.2;
-    float tri = 1.0 - abs(1.0 - mod(m, 2.0));
-    a += 0.3*sin(m*3.14159);
-    return 0.1*exp(tri*1.2)*vec2(cos(a), sin(a));
-  }
-  vec2 wFractal(vec2 p, float A){
+  // fractal: folds itself in stage by stage, and lets go in the same order (first in, first out)
+  vec2 mFractal(vec2 p){
+    float r = length(p);
+    float ph = prog(clamp(r/gDiag, 0.0, 1.0));
+    float en = envOf(ph);
+    gE = en*uDepth;
+    float amt = clamp(0.5 + uDepth*0.8, 0.0, 1.0);
+    float inP = clamp(ph/0.42, 0.0, 1.0), outP = clamp((ph - 0.58)/0.42, 0.0, 1.0);
     vec2 w = p;
     for (int i=0; i<5; i++){ float fi = float(i);
-      float wi = smoothstep(0.0, 1.0, clamp(A*6.5 - fi*1.1, 0.0, 1.0));
+      float wi = smoothstep(0.0, 1.0, clamp(inP*5.5 - fi, 0.0, 1.0))*(1.0 - smoothstep(0.0, 1.0, clamp(outP*5.5 - fi, 0.0, 1.0)))*amt;
       vec2 f = abs(w) - vec2(0.27, 0.15)*(1.0 + 0.2*sin(uFlow*0.785 + fi));
-      f = rot(0.5 + 0.3*sin(uFlow*0.393 + uSeed + fi*0.7)) * f * 1.16;
+      f = rot(0.5 + 0.3*sin(uFlow*0.393 + uSeed + fi*0.7) + uDir*0.6*uPhi) * f * 1.16;
       w = mix(w, f, wi);
     }
+    gF = max(gE, amt*en);
     return w;
   }
-  // Droste: the cover inside the cover, one dive per cycle (uU 0..1), seamless because the map is periodic in log-radius.
-  vec2 wTunnel(vec2 p, float A){
+  // tunnel: Droste dive – the cover inside the cover. Zooms in the whole cycle; ends exactly one period deeper.
+  vec2 mTunnel(vec2 p){
+    float x = uPhi; float ph = x*x*x*(x*(x*6.0-15.0)+10.0);
+    float s = envOf(ph);
+    gE = s*uDepth;
+    float Pmax = log(400.0);
+    float P = mix(Pmax, log(2.3), smoothstep(0.0, 1.0, s));
+    float off = Pmax*(ph + smoothstep(0.6, 1.0, ph));
     float r = max(length(p), 1e-5); float a = atan(p.y, p.x);
-    float s = smoothstep(0.0, 0.6, A);
-    float P = mix(log(400.0), log(2.3), s);
     float lrMax = log(1.2);
-    float lr = lrMax - mod(lrMax - log(r) + P*uU, P);
+    float lr = lrMax - mod(lrMax - log(r) + off, P);
     a += s*1.1*(lr - lrMax);
+    gF = s;
     return exp(lr)*vec2(cos(a), sin(a));
   }
 
   void main(){
     float asp = uRes.x/uRes.y;
+    gDiag = 0.5*length(vec2(asp, 1.0));
     vec2 p = (vUv-0.5)*vec2(asp, 1.0);
     p *= 1.0 - 0.028*uPulse;              // centred punch on the beat
-    float A = uA;
-    gShade = 1.0; gSpec = 0.0; gEdge = 0.0; gRim = 0.0; gDispV = vec2(0.0);
+    gShade = 1.0; gSpec = 0.0; gEdge = 0.0; gRim = 0.0; gE = 0.0; gF = 0.0; gDispV = vec2(0.0); gMask = vec2(0.0);
     vec2 w;
-    if (uMode == 0) w = wLiquid(p, A);
-    else if (uMode == 1) w = wVortex(p, A);
-    else if (uMode == 2) w = wWater(p, A);
-    else if (uMode == 3) w = wShatter(p, A);
-    else if (uMode == 4) w = wPrism(p, A);
-    else if (uMode == 5) w = wKaleido(p, A);
-    else if (uMode == 6) w = wMandala(p, A);
-    else if (uMode == 7) w = wFractal(p, A);
-    else w = wTunnel(p, A);
+    if (uMode == 0) w = mLiquid(p);
+    else if (uMode == 1) w = mVortex(p);
+    else if (uMode == 2) w = mWater(p);
+    else if (uMode == 3) w = mShatter(p);
+    else if (uMode == 4) w = mPrism(p);
+    else if (uMode == 5) w = mKaleido(p, false);
+    else if (uMode == 6) w = mKaleido(p, true);
+    else if (uMode == 7) w = mFractal(p);
+    else w = mTunnel(p);
+    w = mix(p, w, uGate);                 // gate: mode switch / pause glide every point home
 
     vec2 dx = dFdx(w), dy = dFdy(w);
     if (uMode <= 1) { // liquid folds catch the light
       float px = 1.0/uRes.y;
       float J = (dx.x*dy.y - dx.y*dy.x)/(px*px);
-      gShade *= 1.0 + A*(0.6*exp(-abs(J)*2.2) - 0.07);
+      gShade *= 1.0 + gE*(0.6*exp(-abs(J)*2.2) - 0.07);
     }
-    vec3 c;
-    if (uMode == 5 || uMode == 6) {
-      // kaleidoscope blooms out of the centre and folds back into it – no cross-fade of the whole frame
-      vec2 w2 = wLiquid(p, A*0.22);
-      vec2 dx2 = dFdx(w2), dy2 = dFdy(w2);
-      float r = length(p);
-      float R = uBloom * (1.0 + 0.10*cos(uSegs*atan(p.y, p.x) + uFlow*0.8));
-      float m = smoothstep(R - 0.09, R + 0.01, r);
-      vec3 inner = vec3(0.0), outer = vec3(0.0);
-      if (m < 0.999) inner = colorAt(w, dx, dy, uFill);
-      if (m > 0.001) outer = colorAt(w2, dx2, dy2, uFill*0.08);
-      c = mix(inner, outer, m);
-      gRim = exp(-pow((r - R + 0.035)/0.025, 2.0)) * smoothstep(0.0, 0.12, uBloom) * 0.6;
-    } else {
-      c = colorAt(w, dx, dy, uFill);
-    }
+    vec3 c = colorAt(w, dx, dy, uFillK*uAct);
     c *= gShade;
     c += gSpec*vec3(1.0, 0.98, 0.94);
     c = mix(c, c*0.1, gEdge*0.85);
     c += gRim*0.32*(0.6 + c);
     c = hueShift(c, uHue);
     float l = dot(c, vec3(0.299, 0.587, 0.114));
-    c = mix(vec3(l), c, 1.0 + 0.22*A);
+    c = mix(vec3(l), c, 1.0 + 0.22*gE);
     c *= 1.0 + 0.07*uPulse;
     c = max(c, 0.0);
     o = vec4(mix(c, texture(uPrev, vUv).rgb, uTrail), 1.0);
@@ -642,7 +722,7 @@
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.imgB); gl.uniform1i(P.u.uImgB, 2);
       gl.uniform2f(P.u.uRes, this.w, this.h);
       if (P.u.uMode) gl.uniform1i(P.u.uMode, f.mode);
-      for (const k of ["Mix", "Square", "A", "Fill", "Flow", "Pulse", "U", "Seed", "Segs", "Hue", "Trail", "Glow", "Disp", "Bloom"]) {
+      for (const k of ["Act", "Mix", "Square", "Phi", "Depth", "Gate", "Lag", "FillK", "Flow", "Pulse", "Seed", "Segs", "Hue", "Trail", "Glow", "Disp", "Turns", "Dir"]) {
         const loc = P.u["u" + k];
         if (loc) gl.uniform1f(loc, k === "Trail" && this.needsInit ? 0 : f[k.toLowerCase()]);
       }
@@ -907,27 +987,35 @@
   let renderer = null;
   const audio = new AudioModel();
   const state = {
-    energyFast: 0, energySlow: 0, A: 0, env: 0, pulse: 0, trans: 0, mix: 1,
-    presetKey: "liquid", seed: 0, segs: 8, hueDir: 1, pending: true,
-    lastSection: -1, lastCycle: null, cycleU: 0, felt: 0, flow: 0,
+    energyFast: 0, energySlow: 0, gate: 0, env: 0, pulse: 0, mix: 1, dissolve: 0,
+    presetKey: "liquid", seed: 0, segs: 8, dir: 1, turns: 0, lag: 0.35, cycScale: 1, pending: false,
+    cycleId: null, cycleLen: 32, cycleU: 0, felt: 0, flow: 0, forceU: null,
     pos: 0, posAt: 0, playing: false, lastSync: 0, time: 0,
   };
   let isOpen = false, raf = 0, lastNow = 0, layoutTick = 0;
+  const envOf = (x) => smooth01(x / 0.3) * (1 - smooth01((x - 0.7) / 0.3));
 
-  function choosePreset(section, cycle) {
+  // Latched once per cycle, while every point is home – so switching never shows.
+  function startCycle(id, len) {
     let key = settings.mode;
-    const salt = (audio.uri || "x") + ":" + section + ":" + Math.floor(cycle / 4);
     if (key === "auto" || !PRESETS[key]) {
       const pool = state.energySlow > 0.5 ? LOUD_POOL : CALM_POOL;
-      let i = hashStr(salt) % pool.length;
+      let i = hashStr((audio.uri || "x") + ":" + id) % pool.length;
       if (pool[i] === state.presetKey) i = (i + 1) % pool.length;
       key = pool[i];
     }
-    const h = hashStr(salt + key);
+    const h = hashStr((audio.uri || "x") + ":" + id + ":" + key);
+    const E = clamp(state.energySlow * 1.15);
+    const rm = reducedMotion.matches;
     state.presetKey = key;
     state.seed = (h % 1000) / 37;
     state.segs = [6, 8, 10, 12][h % 4];
-    state.hueDir = h & 16 ? 1 : -1;
+    state.dir = h & 16 ? 1 : -1;
+    state.cycleLen = len;
+    state.cycScale = clamp((len - 4) / 12); // very short sections only breathe a little
+    const spins = !rm && state.cycScale > 0.6;
+    state.turns = !spins ? 0 : key === "vortex" ? state.dir * (E > 0.7 ? 2 : 1) : E > 0.42 ? state.dir : 0;
+    state.lag = rm ? 0.1 : 0.18 + 0.14 * E;
   }
 
   function syncPosition(now) {
@@ -936,9 +1024,11 @@
     try { playing = !!S.Player.isPlaying(); } catch (_) {}
     const predicted = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0);
     const err = p - predicted;
-    // small errors are eased out (no visible jumps), big ones (seek, pause) snap
-    if (!state.lastSync || Math.abs(err) > 0.3 || playing !== state.playing) state.pos = p;
-    else state.pos = predicted + err * 0.35;
+    // small errors are eased out (no visible jumps), big ones (seek, pause) snap – and dissolve
+    if (!state.lastSync || Math.abs(err) > 0.3 || playing !== state.playing) {
+      if (state.lastSync && Math.abs(err) > 0.3) state.dissolve = 1;
+      state.pos = p;
+    } else state.pos = predicted + err * 0.35;
     state.posAt = now;
     state.playing = playing;
     state.lastSync = now;
@@ -955,63 +1045,55 @@
     const pos = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0) + settings.syncMs / 1000;
     const a = audio.sample(pos);
     const live = state.playing;
-    const I = settings.intensity * (reducedMotion.matches ? 0.4 : 1);
+    const rm = reducedMotion.matches;
+    const I = settings.intensity * (rm ? 0.4 : 1);
 
     const loud = live ? a.loud : 0;
     state.energyFast = follow(state.energyFast, loud, 14, 3.5, dt);
     state.energySlow = follow(state.energySlow, live ? loud * 0.55 + a.sectionLoud * 0.45 : 0, 0.9, 0.55, dt);
 
-    // ---- beat clock: felt beats, two-bar breathing cycle anchored on each section's first downbeat ----
+    // ---- beat clock: felt beats; ~8-bar cycles fitted into each song section, every point home on its downbeats ----
     const m = audio.mult();
-    const B = audio.beatPos(pos);
-    const F = (B - audio.d0) / m;
-    const cycLen = 2 * audio.bpb;
-    const anchorBeat = audio.secAnchor[a.section] ?? audio.d0;
-    const Fa = Math.round((anchorBeat - audio.d0) / m);
-    const rel = F - Fa;
-    const cycle = Math.floor(rel / cycLen);
-    const local = rel - cycle * cycLen;
-    const kE = lerp(1.5, 4.2, clamp(state.energySlow * 1.2)); // calm: smooth glide, loud: hard push on every beat
-    const k = Math.floor(local), fr = local - k;
-    const u = (k + 1 - Math.pow(1 - fr, kE)) / cycLen;
+    const F = (audio.beatPos(pos) - audio.d0) / m;
+    const kE = lerp(1.6, 4.0, clamp(state.energySlow * 1.2)); // calm: smooth glide, loud: hard push on every beat
+    const cyc = audio.cycleAt(F, m, kE);
+    if (cyc.id !== state.cycleId) { state.cycleId = cyc.id; startCycle(cyc.id, cyc.len); }
+    const u = state.forceU != null ? clamp(state.forceU) : cyc.u;
     state.cycleU = u;
     state.felt = F;
     const Fi = Math.floor(F), Ff = F - Fi;
     if (live) state.flow = Fi + 1 - Math.pow(1 - Ff, kE);
 
-    const sectionChanged = a.section !== state.lastSection;
-    if (sectionChanged || cycle !== state.lastCycle) {
-      if (sectionChanged || (settings.mode === "auto" && cycle % 4 === 0)) state.pending = true;
-      state.lastSection = a.section; state.lastCycle = cycle;
-    }
+    // gate: glides every point home for a manual mode change or a pause, then back out
+    if (state.pending || !live) {
+      state.gate = Math.max(0, state.gate - dt * (state.pending ? 2.5 : 0.8));
+      if (state.pending && state.gate === 0) { startCycle(state.cycleId, state.cycleLen); state.pending = false; }
+    } else state.gate = Math.min(1, state.gate + dt * 0.7);
+    const gate = smooth01(state.gate);
 
-    const env = Math.pow(Math.sin(Math.PI * u), 2);
-    const depth = I * (0.28 + 0.72 * clamp(state.energySlow * 1.15));
-    let targetA = live ? env * depth : 0;
-    if (state.pending) {
-      // swap the morph character only while the original cover is on screen
-      targetA = 0;
-      if (state.A < 0.02) { choosePreset(a.section, cycle); state.pending = false; }
-    }
-    targetA += state.trans * 0.55;
-    state.A += clamp(targetA - state.A, -dt * 5, dt * 5); // rate limit hides section jumps, keeps beat surges
-    state.trans *= Math.exp(-dt / 1.1);
+    const E = clamp(state.energySlow * 1.15);
+    const depth = I * (0.3 + 0.7 * E) * state.cycScale; // the calmer, the closer to the original
+    const env = envOf(u) * depth * gate;
+    state.env = env;
+    state.dissolve *= Math.exp(-dt / 0.3);
     state.mix = Math.min(1, state.mix + dt / 1.8);
 
     const accent = audio.accentAt(Fi * m + audio.d0);
-    const downbeat = ((Fi - Fa) % audio.bpb + audio.bpb) % audio.bpb === 0 ? 1.25 : 1;
-    state.pulse = live && !reducedMotion.matches ? Math.exp(-Ff * 5.5) * (0.35 + 0.65 * accent) * downbeat * (0.3 + 0.7 * state.energyFast) * settings.intensity : 0;
+    const downbeat = ((Fi % audio.bpb) + audio.bpb) % audio.bpb === 0 ? 1.25 : 1;
+    state.pulse = live && !rm ? Math.exp(-Ff * 5.5) * (0.35 + 0.65 * accent) * downbeat * (0.3 + 0.7 * state.energyFast) * settings.intensity * (0.45 + 0.55 * clamp(env * 2)) : 0;
 
     if (++layoutTick % 60 === 0) layout();
 
     const P = PRESETS[state.presetKey];
-    const A = state.A;
     const asp = renderer.w / renderer.h;
+    // how far the sharp mirrored cover spreads around the square: one smooth swell per cycle, not per pixel
+    const act = smooth01((u - 0.12) / 0.3) * smooth01((0.88 - u) / 0.3) * clamp(depth * 2.2) * gate;
     renderer.render({
-      mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp), a: A, fill: A * P.fill,
-      flow: state.flow, pulse: state.pulse, u: state.cycleU, seed: state.seed, segs: state.segs,
-      hue: state.hueDir * A * 0.45, trail: reducedMotion.matches ? 0 : 0.1 + 0.36 * clamp(A * 1.3),
-      glow: A * 0.55, disp: A * (P.mode === 4 ? 0.02 : 0.004) + state.pulse * A * 0.004, bloom: A * 1.7,
+      act, mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp),
+      phi: u, depth: depth * gate, gate, lag: state.lag, fillk: P.fill, flow: state.flow, pulse: state.pulse,
+      seed: state.seed, segs: state.segs, turns: state.turns, dir: state.dir,
+      hue: state.dir * env * 0.4, glow: env * 0.5, disp: P.mode === 4 ? 0.1 : env * 0.004,
+      trail: rm ? 0 : Math.max(0.08 + 0.3 * clamp(env * 1.3), 0.88 * state.dissolve),
     });
   }
 
@@ -1038,7 +1120,6 @@
       currentCoverUrl = url;
       renderer.pushImage(renderer.uploadImage(img));
       state.mix = 0;
-      state.trans = Math.max(state.trans, 0.6);
       extractAccent();
     } catch (e) {
       console.warn("[Coverflux] cover load failed", e);
@@ -1087,7 +1168,7 @@
     refreshInfo();
     if (uri !== currentTrackUri) {
       currentTrackUri = uri;
-      state.lastSection = -1; state.lastCycle = null; state.pending = true;
+      state.cycleId = null; state.dissolve = 1;
       let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
       audio.load(uri, dur).then(refreshStatus);
       refreshStatus();
@@ -1131,7 +1212,7 @@
     if (ensureRenderer()) {
       layout();
       renderer.needsInit = true;
-      state.A = 0; state.pending = true;
+      state.gate = 0; state.pending = false; state.cycleId = null;
       lastNow = 0; state.lastSync = 0;
       currentCoverUrl = null;
       onTrack();
