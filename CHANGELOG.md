@@ -7,7 +7,7 @@
 - Neue Steuerung: eine schlanke Leiste mit Quelle, Modi-Chip (zeigt den laufenden Modus), BPM-Chip mit Beat-Punkt, Vollbild/Quadrat als Symbol und Schließen.
 - Modi-Panel mit Kacheln und Intensität. Tempo-Panel mit Erkennung, Verhältnis, Tap-Fläche und Sync.
 - `Esc` schließt zuerst das Panel. Solange ein Panel offen ist, blendet sich die Steuerung nicht aus.
-- docs/modi-ideen.md: zwölf Konzepte für neue Modi.
+- docs/modi-ideen.md: zwölf mathematische Konzepte für neue Modi.
 
 ## v2.5 — Beat-Raster-Prüfung
 - Das Tempo kommt aus der mittleren Schlaglänge des Rasters statt aus Spotifys Kopfzahl.
