@@ -9,7 +9,7 @@ const browser = await launch({ gpu: true });
 const page = await browser.newPage({ viewport: { width: 640, height: 420 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
-page.on("console", (m) => { if (m.type() === "error" || /shader|webgl/i.test(m.text())) errors.push(m.text()); });
+page.on("console", (m) => { const t = m.text(); if ((m.type() === "error" && !/Failed to load resource/.test(t)) || /shader|webgl/i.test(t)) errors.push(t); });
 await page.goto(`${srv.url}/test/harness.html`);
 await page.click("#cf-btn");
 await page.evaluate((f) => { window.mock.seek(64); if (f) window.Coverflux.settings.frame = f; document.querySelector("#coverflux").classList.add("cf-idle"); }, frame);

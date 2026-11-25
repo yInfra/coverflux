@@ -87,6 +87,7 @@ document.getElementById('next').onclick = () => mock.next();
 setInterval(()=>{ document.getElementById('np').textContent = Spicetify.Player.data.item.metadata.title + ' · ' + (Spicetify.Player.getProgress()/1000).toFixed(1)+'s'; }, 200);
 </script>
 <script src="../src/beat-engine.js"></script>
-<script src="../src/coverflux.js"></script>
+<script src="../src/core.js"></script>
+<script src="../src/adapters/spicetify.js"></script>
 </body>
 </html>

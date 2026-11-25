@@ -1,12 +1,12 @@
 {
   "name": "coverflux",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "description": "Spicetify extension: turns Spotify Desktop into a beat-locked visualizer that morphs the cover art.",
   "type": "module",
   "scripts": {
     "build": "node tools/build.mjs",
-    "check": "node --check src/coverflux.js && node --check src/beat-engine.js && node --check dist/coverflux.js",
+    "check": "node --check src/core.js && node --check src/beat-engine.js && node --check src/adapters/spicetify.js && node --check dist/coverflux.js",
     "test": "npm run check && node --test test/*.test.mjs",
     "serve": "npx --yes http-server -p 8765 -c-1 .",
     "preview": "node tools/preview.mjs",

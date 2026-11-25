@@ -1,8 +1,8 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
-// DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 3.0.0
-// Built from src/beat-engine.js + src/coverflux.js – edit those, then run `npm run build`.
+// DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art through mathematical mappings and always lands back on the original.
+// VERSION: 3.1.0
+// Built from src/beat-engine.js + src/core.js + src/adapters/spicetify.js – edit those, then run `npm run build`.
 
 // Coverflux beat engine – analyses decoded audio into the same shape as Spotify's audio analysis
 // (beats, bars, sections, segments, track). Pure JS, no dependencies: runs in a Web Worker inside Spotify,
@@ -374,15 +374,21 @@ function coverfluxBeatFactory() {
   return { analyze, align, toMono22k, SR };
 }
 
-(function Coverflux() {
+// Coverflux core – the platform-neutral visualizer. A host adapter (src/adapters/*) supplies playback position,
+// track metadata, cover art, an optional ready-made analysis, storage, layout and the button that opens it.
+//
+// host = {
+//   name, storage: { get(key), set(key, value) },
+//   position(): { pos /* s */, playing },              track(): { uri, title, artist, duration, local } | null,
+//   on(event, cb)  – "track" | "playpause" | "analysis" (cb(uri, analysis) for live analyses),
+//   getAnalysis?(uri): Promise<analysis>,               trackCover?(): Promise<url|image>, contextCover?(): Promise<url|image>,
+//   accent?(): Promise<css color>,                      bottomInset?(): px kept free at the bottom (Spotify's playbar),
+//   mountToggle?(toggle): { active },                    playbarGlow?: bool, closable?: bool (default true),
+//   library?: bool (default true), keyTarget?: EventTarget for shortcuts (default document)
+// }
+function createCoverflux(host) {
   "use strict";
-  const S = window.Spicetify;
-  if (!(S && S.Player && S.Player.addEventListener && S.Playbar && S.Playbar.Button && S.LocalStorage && S.Platform)) {
-    setTimeout(Coverflux, 300);
-    return;
-  }
-  if (window.__coverfluxLoaded) return;
-  window.__coverfluxLoaded = true;
+  const closable = host.closable !== false;
 
   /* ------------------------------------------------------------------ */
   /* Settings                                                            */
@@ -390,14 +396,14 @@ function coverfluxBeatFactory() {
   const SETTINGS_KEY = "coverflux:settings";
   const TEMPO_KEY = "coverflux:tempo"; // per-track tempo-feel overrides
   const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", autoOff: [], showInfo: true, syncMs: 0, frame: "full" };
-  const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(S.LocalStorage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
+  const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(host.storage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
   const settings = loadJSON(SETTINGS_KEY, DEFAULTS);
   const tempoOverrides = loadJSON(TEMPO_KEY, {});
-  const saveSettings = () => { try { S.LocalStorage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
+  const saveSettings = () => { try { host.storage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
   const saveTempo = () => {
     const keys = Object.keys(tempoOverrides);
     if (keys.length > 300) delete tempoOverrides[keys[0]];
-    try { S.LocalStorage.set(TEMPO_KEY, JSON.stringify(tempoOverrides)); } catch (_) {}
+    try { host.storage.set(TEMPO_KEY, JSON.stringify(tempoOverrides)); } catch (_) {}
   };
 
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
@@ -693,11 +699,11 @@ function coverfluxBeatFactory() {
       if (!uri) { this.set(buildSynthetic("none", durationSec)); return; }
       if (this.cache.has(uri)) { this.set(this.cache.get(uri)); return; }
       this.set(buildSynthetic(uri, durationSec)); // immediate, replaced when real data arrives
-      const local = /^spotify:local:/.test(uri);
+      const local = !!(meta && meta.local) || /^spotify:local:/.test(uri);
       let data = null;
       if (!local) {
         try {
-          if (typeof S.getAudioData === "function") data = await withTimeout(S.getAudioData(uri), 9000);
+          if (typeof host.getAnalysis === "function") data = await withTimeout(Promise.resolve(host.getAnalysis(uri)), 9000);
         } catch (_) { data = null; }
       }
       if (this.uri !== uri) return;
@@ -1620,47 +1626,10 @@ function coverfluxBeatFactory() {
   /* ------------------------------------------------------------------ */
   /* Cover sources                                                       */
   /* ------------------------------------------------------------------ */
-  const contextCoverCache = new Map();
-
-  function trackCover(data) {
-    const item = data && (data.item || data.track);
-    if (!item) return null;
-    const md = item.metadata || {};
-    return imageUrl(md.image_xlarge_url || md.image_large_url || md.image_url || largest(item.images) || largest(item.album && item.album.images));
-  }
-
-  async function contextCover(data) {
-    const ctx = (data && data.context) || {};
-    const uri = ctx.uri || (data && data.context_uri) || "";
-    if (!uri) return null;
-    if (contextCoverCache.has(uri)) return contextCoverCache.get(uri);
-    let url = null;
-    const md = ctx.metadata || (data && data.context_metadata) || {};
-    for (const k of ["image_xlarge_url", "image_large_url", "image_url"]) if (md[k]) { url = imageUrl(md[k]); break; }
-    const type = uri.split(":")[1];
-    if (!url && type === "playlist") {
-      try {
-        const api = S.Platform.PlaylistAPI;
-        if (api && api.getMetadata) {
-          const m = await withTimeout(api.getMetadata(uri), 6000);
-          url = imageUrl(largest(m.images) || (m.image && m.image.url) || m.picture);
-        }
-      } catch (_) {}
-      if (!url && S.CosmosAsync) {
-        try {
-          const id = uri.split(":").pop();
-          const m = await withTimeout(S.CosmosAsync.get("https://api.spotify.com/v1/playlists/" + id + "?fields=images"), 6000);
-          url = imageUrl(largest(m.images));
-        } catch (_) {}
-      }
-    }
-    if (!url && type === "album") url = trackCover(data);
-    if (url) contextCoverCache.set(uri, url);
-    return url;
-  }
-
-  // spotify:localfileimage: (local files) refuses CORS mode but is still usable by WebGL without it.
+  // Some sources (e.g. Spotify's local-file images) refuse CORS mode but are still usable by WebGL without it.
+  // Hosts may also hand over a ready image/canvas/bitmap instead of a URL.
   function loadImage(url) {
+    if (url && typeof url === "object") return Promise.resolve(url);
     return loadImageMode(url, true).catch(() => loadImageMode(url, false));
   }
   function loadImageMode(url, cors) {
@@ -1677,7 +1646,6 @@ function coverfluxBeatFactory() {
   /* ------------------------------------------------------------------ */
   /* Styles + DOM                                                        */
   /* ------------------------------------------------------------------ */
-  const ICON = '<svg role="img" height="16" width="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8z"/><path d="M4.2 9.6c1.3-2.9 2.6-2.9 3.8 0s2.5 2.9 3.8 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 6.1c.9-.9 1.9-.9 3 0s2.1.9 3 0" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".6"/></svg>';
 
   const style = document.createElement("style");
   style.id = "coverflux-style";
@@ -1815,6 +1783,7 @@ function coverfluxBeatFactory() {
   #coverflux .cf-note.cf-show{opacity:1}
   #coverflux .cf-error{position:absolute;inset:0;display:none;place-items:center;font-size:14px;color:rgba(243,239,232,.7)}
   #coverflux.cf-failed .cf-error{display:grid}
+  #coverflux.cf-noclose .cf-close,#coverflux.cf-nosource .cf-seg,#coverflux.cf-nosource .cf-seg + .cf-sep,#coverflux.cf-nolib .cf-lib{display:none}
   @media (max-width:900px){#coverflux .cf-chip small{display:none}#coverflux .cf-info{max-width:30vw}}
   @media (prefers-reduced-motion:reduce){#coverflux,#coverflux .cf-chrome,#coverflux .cf-panel{transition:none}
     #coverflux .cf-mrow.cf-running .cf-mt b::after{animation:none}}
@@ -1881,7 +1850,7 @@ function coverfluxBeatFactory() {
   glowEl.setAttribute("aria-hidden", "true");
   const glowCv = document.createElement("canvas");
   glowEl.appendChild(glowCv);
-  document.body.appendChild(glowEl);
+  if (host.playbarGlow) document.body.appendChild(glowEl);
   const glowCtx = glowCv.getContext("2d", { alpha: false });
   const glowTmp = document.createElement("canvas");
   const glowTmpCtx = glowTmp.getContext("2d", { alpha: false });
@@ -1889,6 +1858,7 @@ function coverfluxBeatFactory() {
   // Mirror at exactly 1:1 scale: the row touching the playbar is the bottom row of the visual, x lines up pixel for pixel.
   // Blur happens inside the canvas on an edge-padded copy, so it can't pull the reflection away from the edge.
   function drawGlow(src) {
+    if (!host.playbarGlow) return;
     const rw = root.clientWidth, rh = root.clientHeight, gh = glowEl.clientHeight;
     if (!glowCtx || !glowTmpCtx || !src.width || !src.height || !rw || !rh || !gh) return;
     const W = GLOW_W, H = Math.max(4, Math.round(W * gh / rw)), P = GLOW_PAD;
@@ -2088,10 +2058,9 @@ function coverfluxBeatFactory() {
   /* Layout: cover everything except the bottom playbar                  */
   /* ------------------------------------------------------------------ */
   function playbarTop() {
-    const bar = document.querySelector('.Root__now-playing-bar, [data-testid="now-playing-bar"], footer[data-testposition="now-playing-bar"], .main-nowPlayingBar-container');
-    if (!bar) return window.innerHeight - 90;
-    const r = bar.getBoundingClientRect();
-    return r.height > 0 ? r.top : window.innerHeight - 90;
+    let inset = 0;
+    try { inset = host.bottomInset ? host.bottomInset() || 0 : 0; } catch (_) {}
+    return window.innerHeight - inset;
   }
   function layout() {
     const bottom = Math.max(0, Math.round(window.innerHeight - playbarTop()));
@@ -2148,8 +2117,7 @@ function coverfluxBeatFactory() {
 
   function syncPosition(now) {
     let p = 0, playing = false;
-    try { p = (S.Player.getProgress() || 0) / 1000; } catch (_) {}
-    try { playing = !!S.Player.isPlaying(); } catch (_) {}
+    try { const ps = host.position(); p = ps.pos || 0; playing = !!ps.playing; } catch (_) {}
     const predicted = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0);
     const err = p - predicted;
     // small errors are eased out (no visible jumps), big ones (seek, pause) snap – and dissolve
@@ -2235,15 +2203,15 @@ function coverfluxBeatFactory() {
   let coverToken = 0, currentCoverUrl = null, currentTrackUri = null;
 
   async function refreshCover(force) {
-    const data = S.Player.data;
-    if (!data) return;
     const token = ++coverToken;
     let url = null;
-    if (settings.source === "context") {
-      url = await contextCover(data);
-      if (!url && token === coverToken) note("Kein Playlist-Cover verfügbar – zeige Song-Cover");
-    }
-    if (!url) url = trackCover(data);
+    try {
+      if (settings.source === "context" && host.contextCover) {
+        url = await host.contextCover();
+        if (!url && token === coverToken) note("Kein Playlist-Cover verfügbar – zeige Song-Cover");
+      }
+      if (!url && host.trackCover) url = await host.trackCover();
+    } catch (_) { url = null; }
     if (token !== coverToken || !url) return;
     if (url === currentCoverUrl && !force) return;
     try {
@@ -2252,28 +2220,37 @@ function coverfluxBeatFactory() {
       currentCoverUrl = url;
       renderer.pushImage(renderer.uploadImage(img));
       state.mix = 0;
-      extractAccent();
+      extractAccent(img);
     } catch (e) {
       console.warn("[Coverflux] cover load failed", e);
     }
   }
 
-  async function extractAccent() {
-    try {
-      const uri = S.Player.data && S.Player.data.item && S.Player.data.item.uri;
-      if (!S.colorExtractor || !uri) return;
-      const c = await S.colorExtractor(uri);
-      const col = c && (c.LIGHT_VIBRANT || c.VIBRANT || c.PROMINENT);
-      if (col) root.style.setProperty("--cf-accent", col);
-    } catch (_) {}
+  // accent colour for the UI: from the host if it knows one, else the most vivid bright colour of the cover itself
+  async function extractAccent(img) {
+    let col = null;
+    try { if (host.accent) col = await host.accent(); } catch (_) {}
+    if (!col && img) {
+      try {
+        const c = document.createElement("canvas"); c.width = c.height = 24;
+        const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, 24, 24);
+        const d = g.getImageData(0, 0, 24, 24).data;
+        let best = -1;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255, mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+          const score = (mx - mn) * (0.35 + mx) * (mx > 0.35 ? 1 : 0.2);
+          if (score > best) { best = score; col = "rgb(" + d[i] + "," + d[i + 1] + "," + d[i + 2] + ")"; }
+        }
+        if (best < 0.12) col = "#e8e3d9";
+      } catch (_) { col = null; } // tainted canvas (no CORS) – keep the current accent
+    }
+    if (col) root.style.setProperty("--cf-accent", col);
   }
 
   function refreshInfo() {
-    const item = S.Player.data && (S.Player.data.item || S.Player.data.track);
-    if (!item) return;
-    const md = item.metadata || {};
-    const title = md.title || item.name || "";
-    const artist = md.artist_name || (item.artists && item.artists.map((x) => x.name).join(", ")) || "";
+    const t = host.track();
+    if (!t) return;
+    const title = t.title || "", artist = t.artist || "";
     if (elTitle.textContent === title && elArtist.textContent === artist) return;
     elTitle.textContent = title;
     elArtist.textContent = artist;
@@ -2295,43 +2272,36 @@ function coverfluxBeatFactory() {
     elDetect.title = elDetect.textContent;
   }
 
-  function trackMeta(item, dur) {
-    const md = (item && item.metadata) || {};
-    const uri = (item && item.uri) || "";
-    let title = md.title || (item && item.name) || "", artist = md.artist_name || (item && item.artists && item.artists.map((x) => x.name).join(", ")) || "";
-    if (/^spotify:local:/.test(uri) && (!title || !artist)) {
-      // spotify:local:<artist>:<album>:<title>:<seconds>
-      const p = uri.split(":").slice(2).map((x) => { try { return decodeURIComponent(x.replace(/\+/g, " ")); } catch (_) { return x; } });
-      artist = artist || p[0] || ""; title = title || p[2] || "";
-    }
-    return { title, artist, duration: dur, local: /^spotify:local:/.test(uri) };
-  }
   function reloadCurrent() {
-    const item = S.Player.data && (S.Player.data.item || S.Player.data.track);
-    if (!item || !item.uri) return;
-    audio.cache.delete(item.uri);
-    let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
+    const t = host.track();
+    if (!t || !t.uri) return;
+    audio.cache.delete(t.uri);
     state.cycleId = null; state.dissolve = Math.max(state.dissolve, 0.6);
-    audio.load(item.uri, dur, trackMeta(item, dur)).then(refreshStatus);
+    audio.load(t.uri, t.duration || 0, t).then(refreshStatus);
   }
 
   async function onTrack() {
-    const data = S.Player.data;
-    const item = data && (data.item || data.track);
-    const uri = item && item.uri;
+    const t = host.track();
+    const uri = t && t.uri;
     refreshInfo();
     if (uri !== currentTrackUri) {
       currentTrackUri = uri;
       state.cycleId = null; state.dissolve = 1;
-      let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
-      audio.load(uri, dur, trackMeta(item, dur)).then(refreshStatus);
+      audio.load(uri, (t && t.duration) || 0, t).then(refreshStatus);
       refreshStatus();
     }
     if (isOpen) refreshCover(false);
   }
 
-  S.Player.addEventListener("songchange", () => { state.lastSync = 0; onTrack(); });
-  S.Player.addEventListener("onplaypause", () => { state.lastSync = 0; });
+  host.on("track", () => { state.lastSync = 0; onTrack(); });
+  host.on("playpause", () => { state.lastSync = 0; });
+  // live sources (microphone / system audio) refine their analysis while playing – swap it in without a dissolve
+  host.on("analysis", (uri, a) => {
+    if (!a || uri !== audio.uri) return;
+    audio.cache.set(uri, a);
+    audio.set(a);
+    if (openPanel === "tempo") refreshStatus();
+  });
 
   /* ------------------------------------------------------------------ */
   /* Open / close                                                        */
@@ -2350,7 +2320,7 @@ function coverfluxBeatFactory() {
 
   function onKey(e) {
     if (!isOpen) return;
-    if (e.key === "Escape") { e.stopPropagation(); if (openPanel) setPanel(null); else close(); }
+    if (e.key === "Escape") { if (openPanel) { e.stopPropagation(); setPanel(null); } else if (closable) { e.stopPropagation(); close(); } }
     else if ((e.key === "t" || e.key === "T") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) { e.stopPropagation(); tap(); }
     else if ((e.key === "[" || e.key === "]") && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) {
       e.stopPropagation();
@@ -2392,15 +2362,129 @@ function coverfluxBeatFactory() {
     button.active = false;
   }
 
-  // Registers on the right side of the playbar, next to the lyrics (karaoke) button.
-  const button = new S.Playbar.Button("Coverflux Visualizer", ICON, () => (isOpen ? close() : open()), false, false, true);
-  const labelButton = () => {
-    const el = button.element;
-    if (el && el.setAttribute) { el.setAttribute("aria-label", "Coverflux Visualizer"); el.setAttribute("data-testid", "coverflux-button"); }
-  };
-  labelButton(); setTimeout(labelButton, 1500);
+  const button = host.mountToggle ? host.mountToggle(() => (isOpen ? close() : open())) : { active: false };
+  if (!closable) root.classList.add("cf-noclose");
+  if (!host.contextCover) root.classList.add("cf-nosource");
+  if (host.library === false) root.classList.add("cf-nolib");
 
   syncControls();
   onTrack();
-  window.Coverflux = { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio, presets: PRESETS, library: Library };
+  return { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio, presets: PRESETS, library: Library, refresh: onTrack, reloadCurrent };
+}
+
+// Spicetify host adapter: feeds the Coverflux core from Spotify Desktop (player, metadata, covers, Spotify's
+// audio analysis, LocalStorage) and adds the button next to the lyrics button in the playbar.
+(function CoverfluxSpicetify() {
+  "use strict";
+  const S = window.Spicetify;
+  if (!(S && S.Player && S.Player.addEventListener && S.Playbar && S.Playbar.Button && S.LocalStorage && S.Platform)) {
+    setTimeout(CoverfluxSpicetify, 300);
+    return;
+  }
+  if (window.__coverfluxLoaded) return;
+  window.__coverfluxLoaded = true;
+
+  const ICON = '<svg role="img" height="16" width="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8z"/><path d="M4.2 9.6c1.3-2.9 2.6-2.9 3.8 0s2.5 2.9 3.8 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 6.1c.9-.9 1.9-.9 3 0s2.1.9 3 0" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".6"/></svg>';
+
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+  const largest = (imgs) => (Array.isArray(imgs) && imgs.length ? imgs.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0].url : null);
+  // spotify:image:<id> -> https URL; everything else as is
+  const imageUrl = (u) => (!u ? null : u.startsWith("spotify:image:") ? "https://i.scdn.co/image/" + u.slice(14) : u);
+
+  const current = () => S.Player.data && (S.Player.data.item || S.Player.data.track);
+
+  function trackMeta(item) {
+    if (!item) return null;
+    const md = item.metadata || {};
+    const uri = item.uri || "";
+    let title = md.title || item.name || "", artist = md.artist_name || (item.artists && item.artists.map((x) => x.name).join(", ")) || "";
+    if (/^spotify:local:/.test(uri) && (!title || !artist)) {
+      // spotify:local:<artist>:<album>:<title>:<seconds>
+      const p = uri.split(":").slice(2).map((x) => { try { return decodeURIComponent(x.replace(/\+/g, " ")); } catch (_) { return x; } });
+      artist = artist || p[0] || ""; title = title || p[2] || "";
+    }
+    let duration = 0;
+    try { duration = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
+    return { uri, title, artist, duration, local: /^spotify:local:/.test(uri) };
+  }
+
+  function trackCover() {
+    const item = current();
+    if (!item) return null;
+    const md = item.metadata || {};
+    return imageUrl(md.image_xlarge_url || md.image_large_url || md.image_url || largest(item.images) || largest(item.album && item.album.images));
+  }
+
+  const contextCache = new Map();
+  async function contextCover() {
+    const data = S.Player.data || {};
+    const ctx = data.context || {};
+    const uri = ctx.uri || data.context_uri || "";
+    if (!uri) return null;
+    if (contextCache.has(uri)) return contextCache.get(uri);
+    let url = null;
+    const md = ctx.metadata || data.context_metadata || {};
+    for (const k of ["image_xlarge_url", "image_large_url", "image_url"]) if (md[k]) { url = imageUrl(md[k]); break; }
+    const type = uri.split(":")[1];
+    if (!url && type === "playlist") {
+      try {
+        const api = S.Platform.PlaylistAPI;
+        if (api && api.getMetadata) {
+          const m = await withTimeout(api.getMetadata(uri), 6000);
+          url = imageUrl(largest(m.images) || (m.image && m.image.url) || m.picture);
+        }
+      } catch (_) {}
+      if (!url && S.CosmosAsync) {
+        try {
+          const m = await withTimeout(S.CosmosAsync.get("https://api.spotify.com/v1/playlists/" + uri.split(":").pop() + "?fields=images"), 6000);
+          url = imageUrl(largest(m.images));
+        } catch (_) {}
+      }
+    }
+    if (!url && type === "album") url = trackCover();
+    if (url) contextCache.set(uri, url);
+    return url;
+  }
+
+  function bottomInset() {
+    const bar = document.querySelector('.Root__now-playing-bar, [data-testid="now-playing-bar"], footer[data-testposition="now-playing-bar"], .main-nowPlayingBar-container');
+    if (!bar) return 90;
+    const r = bar.getBoundingClientRect();
+    return r.height > 0 ? window.innerHeight - r.top : 90;
+  }
+
+  const host = {
+    name: "spicetify",
+    playbarGlow: true,
+    storage: { get: (k) => S.LocalStorage.get(k), set: (k, v) => S.LocalStorage.set(k, v) },
+    position: () => ({ pos: (S.Player.getProgress() || 0) / 1000, playing: !!S.Player.isPlaying() }),
+    track: () => trackMeta(current()),
+    // Spotify has no analysis for local files – the core then uses its own library analysis
+    getAnalysis: (uri) => (/^spotify:local:/.test(uri) || typeof S.getAudioData !== "function" ? null : S.getAudioData(uri)),
+    trackCover: async () => trackCover(),
+    contextCover,
+    accent: async () => {
+      const item = current();
+      if (!S.colorExtractor || !item || !item.uri) return null;
+      const c = await S.colorExtractor(item.uri);
+      return c && (c.LIGHT_VIBRANT || c.VIBRANT || c.PROMINENT);
+    },
+    on(event, cb) {
+      if (event === "track") S.Player.addEventListener("songchange", cb);
+      else if (event === "playpause") S.Player.addEventListener("onplaypause", cb);
+    },
+    bottomInset,
+    mountToggle(toggle) {
+      // right side of the playbar, next to the lyrics (karaoke) button
+      const button = new S.Playbar.Button("Coverflux Visualizer", ICON, toggle, false, false, true);
+      const label = () => {
+        const el = button.element;
+        if (el && el.setAttribute) { el.setAttribute("aria-label", "Coverflux Visualizer"); el.setAttribute("data-testid", "coverflux-button"); }
+      };
+      label(); setTimeout(label, 1500);
+      return button;
+    },
+  };
+
+  window.Coverflux = createCoverflux(host);
 })();
