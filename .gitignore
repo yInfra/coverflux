@@ -6,3 +6,7 @@ node_modules/
 !docs/*.png
 .DS_Store
 Thumbs.db
+# dev-only: Beat This! reference environment and reference beats of local (copyrighted) songs
+tools/analyze/.venv/
+test/audio-ref/
+__pycache__/

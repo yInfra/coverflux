@@ -1,7 +1,7 @@
 # Coverflux – installs the extension into Spicetify and applies it to Spotify.
 # Usage:  powershell -ExecutionPolicy Bypass -File .\install.ps1
 $ErrorActionPreference = "Stop"
-$src = Join-Path $PSScriptRoot "src\coverflux.js"
+$src = Join-Path $PSScriptRoot "dist\coverflux.js"
 $ext = Join-Path $env:APPDATA "spicetify\Extensions"
 New-Item -ItemType Directory -Force $ext | Out-Null
 Copy-Item $src (Join-Path $ext "coverflux.js") -Force

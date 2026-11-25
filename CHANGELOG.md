@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.0 — Eigene Beat-Erkennung, 12 neue Modi, Modus-Liste
+- **Eigene Beat-Erkennung** (src/beat-engine.js, reines JS):
+  - Spektrogramm, Spectral Flux, Tempo über die metrische Familie, DP-Beat-Tracking, Takt und Taktanfänge, Abschnitte, Segmente im Format von Spotifys Analyse.
+  - Läuft in Spotify in einem Hintergrund-Thread, ohne Installation und plattformübergreifend.
+  - Gegen Beat This! gemessen: 97 bis 100 % Beat-Treffer im Groove.
+- **Bibliothek:**
+  - Ordner oder Dateien im Tempo-Panel analysieren, gespeichert in IndexedDB.
+  - Zuordnung über ID3-Tag oder Dateiname plus Dauer.
+  - Spotify-Songs werden über den Lautstärkeverlauf mit der Datei abgeglichen (Grob- und Feinsuche).
+  - Lokale Dateien bekommen endlich echte Beats.
+- **12 neue Modi:** Hexa, Quasikristall, Hyperbolisch, Escher-Spirale, Inversion, Rosette, Phyllotaxis, Sphäre, Sierpinski, Moiré, Möbius-Strom, Dreiecksgruppe.
+- **Modus-Liste:**
+  - Ein Klick auf eine Zeile wählt einen festen Modus, Häkchen legen fest, was in Auto läuft.
+  - Gruppiert nach Fluss, Symmetrie, Fraktal und Raum.
+  - Neue Modi sind in Auto automatisch an.
+- **Plattformübergreifend:** dist/coverflux.js als fertiges Bundle (`npm run build`, CI prüft es), install.sh für macOS und Linux.
+- **Werkzeuge:** tools/modes-sheet.mjs (Kontaktbogen und Shader-Check), tools/beat-eval.mjs und tools/analyze/ (Referenzmessung).
+
 ## v2.6 — Modi-Auswahl und neue Steuerung
 - Jeder Modus lässt sich für Auto an- und abschalten. Ein Doppelklick lässt nur einen Modus laufen, die Auswahl wird gespeichert.
 - Die alte Einstellung für einen festen Modus wird übernommen.

@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.6.0
+// VERSION: 3.0.0
 
 (function Coverflux() {
   "use strict";
@@ -18,14 +18,9 @@
   /* ------------------------------------------------------------------ */
   const SETTINGS_KEY = "coverflux:settings";
   const TEMPO_KEY = "coverflux:tempo"; // per-track tempo-feel overrides
-  const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", showInfo: true, syncMs: 0, frame: "full" };
+  const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", autoOff: [], showInfo: true, syncMs: 0, frame: "full" };
   const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(S.LocalStorage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
   const settings = loadJSON(SETTINGS_KEY, DEFAULTS);
-  // Modes Auto may pick from. One enabled mode = that mode, fixed. (Migrates the old single `mode` setting.)
-  if (!Array.isArray(settings.modes)) settings.modes = PRESET_KEYS().includes(settings.mode) ? [settings.mode] : PRESET_KEYS();
-  settings.modes = PRESET_KEYS().filter((k) => settings.modes.includes(k));
-  if (!settings.modes.length) settings.modes = PRESET_KEYS();
-  delete settings.mode;
   const tempoOverrides = loadJSON(TEMPO_KEY, {});
   const saveSettings = () => { try { S.LocalStorage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
   const saveTempo = () => {
@@ -35,21 +30,45 @@
   };
 
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
-  function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
+  function PRESET_KEYS() { return Object.keys(PRESETS); }
+  // group: how the list is sectioned · fill: how far the sharp mirrored cover spreads while morphing
   const PRESETS = {
-    liquid:  { label: "Liquid",  mode: 0, fill: 3.0,  desc: "Marmorstrom, fließt eine Periode weiter" },
-    vortex:  { label: "Vortex",  mode: 1, fill: 3.0,  desc: "Ringe drehen volle Runden" },
-    ripple:  { label: "Ripple",  mode: 2, fill: 1.6,  desc: "Wasser zieht quer durchs Bild" },
-    prism:   { label: "Prism",   mode: 4, fill: 1.8,  desc: "Geriffeltes Glas, Regenbogenkanten" },
-    kaleido: { label: "Kaleido", mode: 5, fill: 3.0,  desc: "Faltet sich von innen nach außen" },
-    mandala: { label: "Mandala", mode: 6, fill: 3.0,  desc: "Kaleido auf einer Spirale" },
-    fractal: { label: "Fractal", mode: 7, fill: 3.0,  desc: "Faltet sich Stufe für Stufe" },
-    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.15, desc: "Droste-Tauchgang ins Cover" },
+    liquid:   { label: "Liquid",        group: "Fluss",    mode: 0,  fill: 3.0,  desc: "Marmorstrom, fließt eine Periode weiter" },
+    ripple:   { label: "Ripple",        group: "Fluss",    mode: 2,  fill: 1.6,  desc: "Wasser zieht quer durchs Bild" },
+    vortex:   { label: "Vortex",        group: "Fluss",    mode: 1,  fill: 3.0,  desc: "Ringe drehen volle Runden" },
+    prism:    { label: "Prism",         group: "Fluss",    mode: 4,  fill: 1.8,  desc: "Geriffeltes Glas, Regenbogenkanten" },
+    tunnel:   { label: "Tunnel",        group: "Fluss",    mode: 8,  fill: 0.15, desc: "Droste-Tauchgang ins Cover" },
+    kaleido:  { label: "Kaleido",       group: "Symmetrie", mode: 5, fill: 3.0,  desc: "Faltet sich von innen nach außen" },
+    mandala:  { label: "Mandala",       group: "Symmetrie", mode: 6, fill: 3.0,  desc: "Kaleido auf einer Spirale" },
+    hexa:     { label: "Hexa",          group: "Symmetrie", mode: 9, fill: 3.0,  desc: "Waben mit sechsfacher Spiegelung (p6m)" },
+    rosette:  { label: "Rosette",       group: "Symmetrie", mode: 14, fill: 6.0, desc: "Blütenblätter aus z ↦ zⁿ" },
+    moire:    { label: "Moiré",         group: "Symmetrie", mode: 18, fill: 3.0, desc: "Zwei Kaleido-Gitter, die sich überlagern" },
+    quasi:    { label: "Quasikristall", group: "Symmetrie", mode: 10, fill: 3.0, desc: "Fünf- oder siebenzählig, wiederholt sich nie" },
+    fractal:  { label: "Fractal",       group: "Fraktal",  mode: 7,  fill: 3.0,  desc: "Faltet sich Stufe für Stufe" },
+    sierpinski: { label: "Sierpinski",  group: "Fraktal",  mode: 17, fill: 40.0,  desc: "Dreiecke voller Dreiecke" },
+    inversion: { label: "Inversion",    group: "Fraktal",  mode: 13, fill: 3.0,  desc: "Kreisinversion, Perlenketten" },
+    phyllo:   { label: "Phyllotaxis",   group: "Fraktal",  mode: 15, fill: 3.0,  desc: "Sonnenblumen-Spirale im goldenen Winkel" },
+    escher:   { label: "Escher-Spirale", group: "Raum",    mode: 12, fill: 3.0,  desc: "Dreht sich endlos in sich selbst" },
+    hyper:    { label: "Hyperbolisch",  group: "Raum",     mode: 11, fill: 3.0,  desc: "Poincaré-Scheibe, Kacheln strömen" },
+    triangle: { label: "Dreiecksgruppe", group: "Raum",    mode: 20, fill: 3.0,  desc: "Dreiecks-Kaleidoskop, Winkel wandern" },
+    sphere:   { label: "Sphäre",        group: "Raum",     mode: 16, fill: 3.0,  desc: "Ikosaeder-Kugel, rollt einmal" },
+    moebius:  { label: "Möbius-Strom",  group: "Raum",     mode: 19, fill: 3.0,  desc: "Fließt von einem Pol in den anderen" },
   };
-  // Auto mode picks from these depending on the energy of the current song section.
-  const CALM_POOL = ["liquid", "ripple", "kaleido", "mandala", "prism"];
-  const LOUD_POOL = ["kaleido", "fractal", "vortex", "tunnel", "mandala", "liquid", "prism"];
+  // Auto picks from these depending on the energy of the current song section (among the ones switched on).
+  const CALM_POOL = ["liquid", "ripple", "prism", "kaleido", "mandala", "hexa", "rosette", "moire", "phyllo", "escher", "sphere"];
+  const LOUD_POOL = ["vortex", "tunnel", "kaleido", "mandala", "fractal", "quasi", "sierpinski", "inversion", "hyper", "triangle", "moebius", "escher", "hexa"];
   const CYCLE_BARS = 16; // one full loop away from the cover and back onto it
+
+  // settings.mode: "auto" or one preset key. settings.autoOff: presets Auto must skip (new presets start switched on).
+  if (Array.isArray(settings.modes)) { // v2.6 stored the enabled list
+    if (settings.modes.length === 1) settings.mode = settings.modes[0];
+    else settings.autoOff = PRESET_KEYS().filter((k) => !settings.modes.includes(k) && ["liquid", "vortex", "ripple", "prism", "kaleido", "mandala", "fractal", "tunnel"].includes(k));
+    delete settings.modes;
+  }
+  if (settings.mode !== "auto" && !PRESET_KEYS().includes(settings.mode)) settings.mode = "auto";
+  settings.autoOff = (Array.isArray(settings.autoOff) ? settings.autoOff : []).filter((k) => PRESET_KEYS().includes(k));
+  if (settings.autoOff.length >= PRESET_KEYS().length) settings.autoOff = [];
+  const autoOn = () => PRESET_KEYS().filter((k) => !settings.autoOff.includes(k));
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                             */
@@ -129,21 +148,240 @@
     return lo;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Library – own beat analysis of the user's audio files               */
+  /* Files are decoded in Spotify, analysed by the beat engine (Web Worker, */
+  /* main-thread fallback) and kept in IndexedDB. Tracks are matched by     */
+  /* title/artist/duration; streamed versions are aligned by loudness.      */
+  /* ------------------------------------------------------------------ */
+  const Library = (() => {
+    const AUDIO_EXT = /\.(mp3|flac|wav|ogg|oga|opus|m4a|aac|webm)$/i;
+    let dbp = null, index = [], worker = null, workerFailed = false, mainEngine = null, busy = false;
+    const available = typeof coverfluxBeatFactory === "function" && typeof indexedDB !== "undefined";
+
+    function db() {
+      if (dbp) return dbp;
+      dbp = new Promise((res, rej) => {
+        const r = indexedDB.open("coverflux", 1);
+        r.onupgradeneeded = () => {
+          const d = r.result;
+          if (!d.objectStoreNames.contains("tracks")) d.createObjectStore("tracks", { keyPath: "id" });
+          if (!d.objectStoreNames.contains("analyses")) d.createObjectStore("analyses", { keyPath: "id" });
+        };
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      return dbp;
+    }
+    function tx(store, mode, fn) {
+      return db().then((d) => new Promise((res, rej) => {
+        const t = d.transaction(store, mode), req = fn(t.objectStore(store));
+        t.oncomplete = () => res(req && "result" in req ? req.result : undefined);
+        t.onerror = () => rej(t.error);
+      }));
+    }
+    async function init() {
+      if (!available) return [];
+      try { index = (await tx("tracks", "readonly", (st) => st.getAll())) || []; } catch (_) { index = []; }
+      return index;
+    }
+
+    // "Señorita (feat. X) - 2019 Remaster" -> "senorita"
+    function norm(v) {
+      return String(v || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
+        .replace(/\s*[([](feat|ft|with|prod)\.?[^)\]]*[)\]]/g, "")
+        .replace(/\s+-\s+(\d{4}\s+)?(remaster|remastered|radio edit|single version|live|mono|stereo)\b.*$/, "")
+        .replace(/[^a-z0-9]+/g, " ").trim();
+    }
+    const artistMatch = (a, b) => {
+      if (!a || !b) return true;
+      if (a.includes(b) || b.includes(a)) return true;
+      const wa = a.split(" ").filter((w) => w.length > 2);
+      return wa.some((w) => b.split(" ").includes(w));
+    };
+
+    // minimal ID3v2.3/2.4 reader: title + artist
+    function id3(buf) {
+      const u = new Uint8Array(buf, 0, Math.min(buf.byteLength, 1 << 20));
+      if (u[0] !== 0x49 || u[1] !== 0x44 || u[2] !== 0x33) return {};
+      const v = u[3], size = (u[6] << 21) | (u[7] << 14) | (u[8] << 7) | u[9], out = {};
+      let p = 10;
+      if (u[5] & 0x40) p += v === 4 ? (u[10] << 21) | (u[11] << 14) | (u[12] << 7) | u[13] : ((u[10] << 24) | (u[11] << 16) | (u[12] << 8) | u[13]) + 4;
+      while (p + 10 < Math.min(u.length, size + 10)) {
+        const id = String.fromCharCode(u[p], u[p + 1], u[p + 2], u[p + 3]);
+        if (!/^[A-Z0-9]{4}$/.test(id)) break;
+        const len = v === 4 ? (u[p + 4] << 21) | (u[p + 5] << 14) | (u[p + 6] << 7) | u[p + 7] : (u[p + 4] << 24) | (u[p + 5] << 16) | (u[p + 6] << 8) | u[p + 7];
+        if (len <= 0 || p + 10 + len > u.length) break;
+        if (id === "TIT2" || id === "TPE1") {
+          const enc = u[p + 10], body = u.subarray(p + 11, p + 10 + len);
+          const label = enc === 0 ? "iso-8859-1" : enc === 1 ? "utf-16" : enc === 2 ? "utf-16be" : "utf-8";
+          try { out[id === "TIT2" ? "title" : "artist"] = new TextDecoder(label).decode(body).replace(/\0+$/g, "").split("\0")[0].trim(); } catch (_) {}
+        }
+        p += 10 + len;
+      }
+      return out;
+    }
+
+    // "SpotiDown.App - Nie mehr - CRO" / "CRO - Nie mehr" -> both orders as title/artist pairs
+    function pairsFor(name, tags) {
+      const pairs = [];
+      if (tags.title) pairs.push([norm(tags.title), norm(tags.artist)]);
+      const parts = name.replace(AUDIO_EXT, "").split(/\s+[-–]\s+/).map((x) => x.trim())
+        .filter((x) => x && !/^(spotidown|y2mate|savefrom|ytmp3|mp3juice)|\.(app|com|net|io|to|cc)$/i.test(x));
+      if (parts.length >= 2) { pairs.push([norm(parts[0]), norm(parts[1])], [norm(parts[1]), norm(parts[0])]); }
+      else if (parts.length === 1 && !tags.title) pairs.push([norm(parts[0]), ""]);
+      return pairs.filter((x) => x[0]);
+    }
+
+    function find(meta) {
+      if (!meta || !index.length) return null;
+      const t = norm(meta.title), a = norm(meta.artist), tol = meta.local ? 3 : 20;
+      let best = null, bd = Infinity;
+      for (const e of index) {
+        if (!e.pairs.some(([pt, pa]) => pt === t && artistMatch(pa, a))) continue;
+        const d = meta.duration ? Math.abs(e.duration - meta.duration) : 0;
+        if (d <= tol && d < bd) { bd = d; best = e; }
+      }
+      return best;
+    }
+    const get = (id) => tx("analyses", "readonly", (st) => st.get(id)).then((r) => r && r.analysis);
+
+    function engine() { return mainEngine || (mainEngine = coverfluxBeatFactory()); }
+    function runEngine(mono) {
+      if (!workerFailed) {
+        try {
+          if (!worker) {
+            const src = coverfluxBeatFactory.toString() + "\nconst E = coverfluxBeatFactory();\nonmessage = (e) => { try { postMessage({ ok: true, a: E.analyze(e.data) }); } catch (err) { postMessage({ ok: false, err: String(err) }); } };";
+            worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+          }
+          return new Promise((res, rej) => {
+            worker.onmessage = (e) => (e.data.ok ? res(e.data.a) : rej(new Error(e.data.err)));
+            worker.onerror = (e) => { if (e.preventDefault) e.preventDefault(); workerFailed = true; worker = null; try { res(engine().analyze(mono)); } catch (err) { rej(err); } };
+            worker.postMessage(mono); // copied, so the main-thread fallback still has the samples
+          });
+        } catch (_) { workerFailed = true; }
+      }
+      return new Promise((res, rej) => setTimeout(() => { try { res(engine().analyze(mono)); } catch (err) { rej(err); } }, 0));
+    }
+
+    async function decode(buf) {
+      const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const ctx = new AC(1, 1, engine().SR);
+      const ab = await ctx.decodeAudioData(buf);
+      const ch = []; for (let i = 0; i < ab.numberOfChannels; i++) ch.push(ab.getChannelData(i));
+      return { mono: engine().toMono22k(ch, ab.sampleRate), duration: ab.duration };
+    }
+
+    // analyses a list of File objects one after another; onProgress(done, total, name, added)
+    async function addFiles(files, onProgress) {
+      if (!available || busy) return 0;
+      busy = true;
+      const list = Array.from(files).filter((f) => AUDIO_EXT.test(f.name));
+      let done = 0, added = 0;
+      try {
+        for (const f of list) {
+          const id = f.name + "|" + f.size + "|" + f.lastModified;
+          onProgress && onProgress(done, list.length, f.name, added);
+          if (!index.some((e) => e.id === id)) {
+            try {
+              const buf = await f.arrayBuffer();
+              const tags = /\.mp3$/i.test(f.name) ? id3(buf) : {};
+              const { mono, duration } = await decode(buf);
+              const analysis = await runEngine(mono);
+              const entry = { id, file: f.name, title: tags.title || "", artist: tags.artist || "", pairs: pairsFor(f.name, tags), duration, added: Date.now() };
+              await tx("analyses", "readwrite", (st) => st.put({ id, analysis }));
+              await tx("tracks", "readwrite", (st) => st.put(entry));
+              index.push(entry); added++;
+            } catch (e) { console.warn("[Coverflux] Analyse fehlgeschlagen:", f.name, e); }
+          }
+          done++;
+        }
+      } finally { busy = false; }
+      onProgress && onProgress(done, list.length, "", added);
+      return added;
+    }
+    async function clear() { await tx("tracks", "readwrite", (st) => st.clear()); await tx("analyses", "readwrite", (st) => st.clear()); index = []; }
+
+    // ---- aligning a file analysis with Spotify's analysis of the streamed version ----
+    function loudCurve(a, n) {
+      const c = new Float32Array(n);
+      c.fill(-60);
+      for (const g of a.segments) {
+        const i0 = Math.max(0, Math.floor(g.start * 10)), i1 = Math.min(n, Math.ceil((g.start + g.duration) * 10));
+        for (let i = i0; i < i1; i++) c[i] = Math.max(c[i], g.loudness_max);
+      }
+      let m = 0; for (const v of c) m += v / n;
+      let sd = 0; for (const v of c) sd += (v - m) * (v - m); sd = Math.sqrt(sd / n) || 1;
+      for (let i = 0; i < n; i++) c[i] = (c[i] - m) / sd;
+      return c;
+    }
+    // returns { ok, shift (s to add to the file's times), corr }
+    function align(own, spot) {
+      const dur = Math.max(own.track.duration || 0, (spot.track && spot.track.duration) || 0, 30), n = Math.ceil(dur * 10) + 1;
+      const A = loudCurve(own, n), B = loudCurve(spot, n);
+      let bestL = 0, best = -Infinity;
+      for (let L = -150; L <= 150; L++) {
+        let x = 0, c = 0;
+        for (let i = Math.max(0, -L); i < n && i + L < n; i++) { x += A[i] * B[i + L]; c++; }
+        x /= Math.max(1, c);
+        if (x > best) { best = x; bestL = L; }
+      }
+      // fine: count segment starts that coincide (±30 ms) around the coarse lag, 5 ms steps
+      const so = own.segments.map((g) => g.start), ss = spot.segments.map((g) => g.start);
+      // several shifts tie within the ±30 ms window – take the middle of that plateau
+      let fineHits = -1, tied = [];
+      for (let k = -24; k <= 24; k++) {
+        const d = bestL / 10 + k * 0.005;
+        let hits = 0, j = 0;
+        for (const t of so) { const u = t + d; while (j < ss.length && ss[j] < u - 0.03) j++; if (j < ss.length && Math.abs(ss[j] - u) <= 0.03) hits++; }
+        if (hits > fineHits) { fineHits = hits; tied = [d]; } else if (hits === fineHits) tied.push(d);
+      }
+      const fine = tied.reduce((x, y) => x + y, 0) / tied.length;
+      return { ok: best > 0.45, shift: Math.round(fine * 1000) / 1000, corr: Math.round(best * 100) / 100 };
+    }
+    function shiftAnalysis(a, d) {
+      const mv = (list) => (list || []).map((x) => Object.assign({}, x, { start: x.start + d }));
+      return Object.assign({}, a, { beats: mv(a.beats).filter((b) => b.start >= 0), bars: mv(a.bars).filter((b) => b.start >= 0), sections: mv(a.sections), segments: mv(a.segments).filter((g) => g.start + g.duration > 0), tatums: mv(a.tatums) });
+    }
+
+    return { available, init, find, get, addFiles, clear, align, shiftAnalysis, norm, get size() { return index.length; }, get busy() { return busy; } };
+  })();
+
   class AudioModel {
     constructor() { this.cache = new Map(); this.a = null; this.uri = null; this.synthetic = true; }
 
-    async load(uri, durationSec) {
+    // Source priority: own analysis of the user's file (aligned to the streamed version) > Spotify > simulated.
+    async load(uri, durationSec, meta) {
       this.uri = uri;
       if (!uri) { this.set(buildSynthetic("none", durationSec)); return; }
       if (this.cache.has(uri)) { this.set(this.cache.get(uri)); return; }
       this.set(buildSynthetic(uri, durationSec)); // immediate, replaced when real data arrives
+      const local = /^spotify:local:/.test(uri);
       let data = null;
-      try {
-        if (typeof S.getAudioData === "function") data = await withTimeout(S.getAudioData(uri), 9000);
-      } catch (_) { data = null; }
+      if (!local) {
+        try {
+          if (typeof S.getAudioData === "function") data = await withTimeout(S.getAudioData(uri), 9000);
+        } catch (_) { data = null; }
+      }
       if (this.uri !== uri) return;
       const ok = data && Array.isArray(data.segments) && data.segments.length > 8 && Array.isArray(data.beats) && data.beats.length > 8;
-      const analysis = ok ? data : buildSynthetic(uri, durationSec);
+      let analysis = ok ? data : null;
+      const hit = Library.find(meta);
+      if (hit) {
+        let own = null;
+        try { own = await Library.get(hit.id); } catch (_) {}
+        if (this.uri !== uri) return;
+        if (own) {
+          if (!ok) analysis = Object.assign({}, own, { alignNote: local ? "Datei" : "Datei, ohne Spotify-Abgleich" });
+          else {
+            const al = Library.align(own, data);
+            if (al.ok) analysis = Object.assign({}, Library.shiftAnalysis(own, al.shift), { alignNote: "Datei, abgeglichen " + (al.shift >= 0 ? "+" : "") + al.shift.toFixed(2) + " s" });
+            else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (r=" + al.corr + ") – nehme Spotify");
+          }
+        }
+      }
+      if (!analysis) analysis = buildSynthetic(uri, durationSec);
+      if (local && !hit) analysis.localMissing = true;
       if (this.cache.size > 24) this.cache.delete(this.cache.keys().next().value);
       this.cache.set(uri, analysis);
       this.set(analysis);
@@ -205,8 +443,12 @@
       const p95 = sorted[Math.floor(sorted.length * 0.95)] || 1;
       for (let i = 0; i < acc.length; i++) acc[i] = clamp(acc[i] / Math.max(p95, 1e-3));
       this.acc = acc;
-      this.grid = this.synthetic ? null : this.checkGrid(segs);
-      this.autoMult = this.synthetic ? 1 : this.detectFeel();
+      this.own = a.source === "coverflux";
+      this.ownNote = a.alignNote || "";
+      this.localMissing = !!a.localMissing;
+      this.grid = this.synthetic ? null : this.own ? { own: true, triple: this.spotifyBpb === 3 || this.spotifyBpb === 6, offRatio: 0, tripleScore: 0 } : this.checkGrid(segs);
+      if (this.own && a.track && a.track.felt_per_bar) this.bpb = clamp(a.track.felt_per_bar, 2, 7); // engine already chose the felt level
+      this.autoMult = this.synthetic || this.own ? 1 : this.detectFeel();
       if (!this.synthetic) this.autoPh = this.bestPhase(this.autoMult);
       if (this.grid) console.info("[Coverflux] Raster:", this.describe(), this.grid);
       this._fa = null; this._csi = 0;
@@ -305,6 +547,7 @@
 
     describe() {
       const m = this.mult(), g = this.grid;
+      if (this.own) return "Eigene Analyse (" + this.ownNote + ") · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → gefühlt " + Math.round(this.tempo / m) + " BPM";
       return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · Raster " + Math.round(this.tempo) + " BPM" +
         (g ? (g.triple ? " · Dreiertakt" : " · Zweiertakt") + (this.shift ? " · um ½ Schlag korrigiert" : "") : "") +
         " → gefühlt " + Math.round(this.tempo / m) + " BPM";
@@ -660,6 +903,174 @@
     return exp(lr)*vec2(cos(a), sin(a));
   }
 
+  /* ---- geometry toolkit for the mathematical modes ---- */
+  vec2 cmul(vec2 a, vec2 b){ return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+  vec2 cdiv(vec2 a, vec2 b){ float d = dot(b,b) + 1e-9; return vec2(a.x*b.x + a.y*b.y, a.y*b.x - a.x*b.y)/d; }
+  vec2 clog(vec2 z){ return vec2(log(max(length(z), 1e-6)), atan(z.y, z.x)); }
+  vec2 cexp(vec2 w){ return exp(w.x)*vec2(cos(w.y), sin(w.y)); }
+  // every new mode morphs like kaleido: each point blends from itself to its image, spreading from the centre out
+  float radialBlend(vec2 p){
+    float ph = prog(clamp(length(p)/gDiag, 0.0, 1.0));
+    float en = envOf(ph);
+    gE = en*uDepth;
+    float b = en*clamp(0.45 + uDepth*0.9, 0.0, 1.0);
+    gF = b;
+    return b;
+  }
+  // fold z (unit disk) into the fundamental triangle of the {P,Q} tiling: wedge mirrors + inversion in the third side
+  vec2 hypFold(vec2 z, float P, float Q, out float n){
+    float a = PI/P, cq = cos(PI/Q);
+    float rr = sin(a)/sqrt(max(cq*cq - sin(a)*sin(a), 1e-4));
+    vec2 C = vec2(sqrt(1.0 + rr*rr), 0.0);
+    n = 0.0;
+    for (int i=0; i<32; i++){
+      float an = atan(z.y, z.x), r = length(z);
+      an -= floor(an/(2.0*a))*2.0*a;
+      if (an > a) { an = 2.0*a - an; n += 1.0; }
+      z = r*vec2(cos(an), sin(an));
+      vec2 d = z - C; float dd = dot(d, d);
+      if (dd < rr*rr) { z = C + d*(rr*rr/dd); n += 1.0; } else break;
+    }
+    return z;
+  }
+  // hexa: p6m wallpaper – twelve mirrors per honeycomb cell, drifting two cells forward and a sixth turn
+  vec2 mHexa(vec2 p){
+    float b = radialBlend(p);
+    float s = 0.3 + 0.08*fract(uSeed*0.31);
+    vec2 q = rot(uDir*PI/3.0*uPhi)*p/s + uDir*vec2(2.0, 0.0)*uPhi;
+    const vec2 H = vec2(1.0, 1.7320508);
+    vec2 a = mod(q, H) - H*0.5, c = mod(q - H*0.5, H) - H*0.5;
+    vec2 l = dot(a, a) < dot(c, c) ? a : c;
+    float r = length(l), an = atan(l.y, l.x);
+    an = mod(an, PI/3.0); an = abs(an - PI/6.0);
+    return mix(p, r*vec2(cos(an), sin(an))*s*1.35 + 0.1*vec2(cos(uSeed), sin(uSeed)), b);
+  }
+  // quasicrystal: n plane waves at n angles – five- or sevenfold order that never repeats
+  vec2 mQuasi(vec2 p){
+    float b = radialBlend(p);
+    float n = uSegs > 9.0 ? 7.0 : 5.0;
+    float f = 15.0 + 5.0*fract(uSeed*0.7), t = uDir*TAU*2.0*uPhi + uFlow*0.12;
+    vec2 v = vec2(0.0);
+    for (int i=0; i<7; i++){ if (float(i) >= n) break;
+      float an = PI*float(i)/n; vec2 d = vec2(cos(an), sin(an));
+      v += d*sin(dot(p, d)*f + t);
+    }
+    return mix(p, kfold(rot(uDir*PI/n*uPhi)*p, 2.0*n, uSeed*0.2)*0.9 + v*(0.22/n), b);
+  }
+  // hyperbolic: {7,3} tiling of the Poincaré disk; a Möbius translation streams the tiles across the disk
+  vec2 mHyper(vec2 p){
+    float b = radialBlend(p);
+    vec2 z = p/0.5; float l = dot(z, z); if (l > 1.0) z /= l;
+    vec2 t = 0.55*uPhi*uDir*vec2(cos(uSeed), sin(uSeed));
+    z = cdiv(z + t, vec2(1.0, 0.0) + cmul(vec2(t.x, -t.y), z));
+    float n; vec2 f = hypFold(rot(uDir*0.5*uPhi)*z, 7.0, 3.0, n);
+    vec2 k = (f - vec2(0.12, 0.05))*3.0;
+    if (mod(n, 2.0) > 0.5) k.y = -k.y;
+    return mix(p, k, b);
+  }
+  // escher spiral: the conformal Droste twist – zooming and turning at once, one spiral turn per cycle
+  vec2 mEscher(vec2 p){
+    float b = radialBlend(p);
+    float L = log(2.6 + 0.8*fract(uSeed*0.43));
+    vec2 w = cmul(clog(p + 1e-5), cdiv(vec2(0.0, TAU), vec2(L, TAU)));
+    w.x = mod(w.x - uDir*L*2.0*uPhi, L) - 0.85*L;
+    return mix(p, cexp(w)*0.5, b);
+  }
+  // inversion: Apollonian circle inversions – pearl chains of the cover
+  vec2 mInversion(vec2 p){
+    float b = radialBlend(p);
+    vec2 z = rot(uDir*PI*0.5*uPhi)*p*2.4 + 0.2*vec2(cos(uSeed), sin(uSeed));
+    float sc = 1.12 + 0.1*sin(TAU*uPhi + uSeed);
+    for (int i=0; i<6; i++){ z = -1.0 + 2.0*fract(0.5*z + 0.5); z *= sc/max(dot(z, z), 0.02); }
+    return mix(p, z*0.22, b);
+  }
+  // rosette: z -> z^n, the cover opens into n petals that keep turning
+  vec2 mRosette(vec2 p){
+    float b = radialBlend(p);
+    float n = floor(uSegs*0.5), R0 = 0.42;
+    float r = length(p), a = atan(p.y, p.x);
+    float rr = R0*pow(r/R0, 1.6)*(1.0 + 0.18*sin(n*a + uFlow*0.6));
+    return mix(p, rr*vec2(cos(n*a + uDir*TAU*uPhi), sin(n*a + uDir*TAU*uPhi)), b);
+  }
+  // phyllotaxis: cells on the golden-angle spiral, every cell a small cover; the spiral winds a quarter turn
+  vec2 mPhyllo(vec2 p){
+    float b = radialBlend(p);
+    float c = 0.085 + 0.02*fract(uSeed*0.5);
+    vec2 q = rot(-uDir*TAU*0.25*uPhi)*p;
+    float k0 = floor(dot(q, q)/(c*c));
+    float bd = 1e9; vec2 bc = vec2(0.0);
+    const float FIB[12] = float[](0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0, 144.0);
+    for (int i=0; i<12; i++) for (int sg=-1; sg<=1; sg+=2){
+      float k = k0 + float(sg)*FIB[i];
+      if (k < 0.0) continue;
+      float an = k*2.39996323; vec2 ctr = c*sqrt(k)*vec2(cos(an), sin(an));
+      float d = distance(q, ctr);
+      if (d < bd) { bd = d; bc = ctr; }
+    }
+    gRim = smoothstep(0.62, 0.72, bd/c)*b*0.6;
+    return mix(p, (q - bc)/c*0.42*uSquare + bc*0.4, b);
+  }
+  // sphere: icosahedral mirror sphere – rolls one full turn
+  vec2 mSphere(vec2 p){
+    float b = radialBlend(p);
+    vec2 d = p/0.46; float l = dot(d, d); if (l > 1.0) d /= l;
+    vec3 s = vec3(d, sqrt(max(0.0, 1.0 - dot(d, d))));
+    s.xz = rot(uDir*TAU*uPhi + uSeed)*s.xz; s.yz = rot(0.5 + 0.3*sin(uSeed))*s.yz;
+    const float PHI = 1.618034;
+    vec3 n = normalize(vec3(-PHI, PHI - 1.0, 1.0));
+    for (int i=0; i<5; i++){ s = abs(s); s -= 2.0*min(0.0, dot(s, n))*n; }
+    gShade = mix(1.0, 0.55 + 0.6*sqrt(max(0.0, 1.0 - min(l, 1.0))), b);
+    return mix(p, (s.xy - vec2(0.25, 0.25))*1.3, b);
+  }
+  // sierpinski: folds into triangles of triangles stage by stage, and out again in the same order
+  vec2 mSierpinski(vec2 p){
+    float r = length(p);
+    float ph = prog(clamp(r/gDiag, 0.0, 1.0)), en = envOf(ph);
+    gE = en*uDepth;
+    float amt = clamp(0.5 + uDepth*0.8, 0.0, 1.0);
+    float inP = clamp(ph/0.42, 0.0, 1.0), outP = clamp((ph - 0.58)/0.42, 0.0, 1.0);
+    float spin = uDir*TAU/3.0*uPhi;
+    vec2 w = rot(spin)*p;
+    const vec2 V1 = vec2(0.0, 0.5), V2 = vec2(-0.433, -0.25), V3 = vec2(0.433, -0.25);
+    for (int i=0; i<4; i++){ float fi = float(i);
+      float wi = smoothstep(0.0, 1.0, clamp(inP*4.5 - fi, 0.0, 1.0))*(1.0 - smoothstep(0.0, 1.0, clamp(outP*4.5 - fi, 0.0, 1.0)))*amt;
+      vec2 c = V1; float d = distance(w, V1);
+      if (distance(w, V2) < d) { c = V2; d = distance(w, V2); }
+      if (distance(w, V3) < d) c = V3;
+      w = mix(w, 2.0*w - c, wi);
+    }
+    gF = max(gE, amt*en);
+    return rot(-spin)*w;
+  }
+  // moiré: two kaleido lattices, a hair apart in angle and scale – huge slow interference rosettes
+  vec2 mMoire(vec2 p){
+    float b = radialBlend(p);
+    float th = uDir*TAU/uSegs*uPhi;
+    vec2 k1 = kfold(rot(th)*p, uSegs, uSeed*0.3), k2 = kfold(rot(-0.97*th + 0.04)*p*1.045, uSegs, uSeed*0.3);
+    return mix(p, 0.5*(k1 + k2), b);
+  }
+  // möbius stream: a loxodromic flow out of one pole into the other, one period per cycle
+  vec2 mMoebius(vec2 p){
+    float b = radialBlend(p);
+    vec2 A = 0.3*vec2(cos(uSeed), sin(uSeed)), B = -A;
+    vec2 w = clog(cdiv(p - A, p - B));
+    float L = 1.5;
+    w.x = mod(w.x + uDir*L*2.0*uPhi, L) - 0.5*L;
+    w.y += 0.55*w.x;
+    vec2 z = cexp(w);
+    return mix(p, cdiv(cmul(B, z) - A, z - vec2(1.0, 0.0)), b);
+  }
+  // triangle group: (P,4) kaleidoscope whose corner angle wanders – flatter and more hyperbolic and back
+  vec2 mTriangle(vec2 p){
+    float b = radialBlend(p);
+    float P = 5.0 + 2.5*(0.5 - 0.5*cos(TAU*uPhi));
+    vec2 z = p/0.5; float l = dot(z, z); if (l > 1.0) z /= l;
+    float n; vec2 f = hypFold(rot(uDir*TAU*uPhi/P)*z, P, 4.0, n);
+    vec2 k = (f - vec2(0.14, 0.06))*2.8;
+    if (mod(n, 2.0) > 0.5) k.y = -k.y;
+    return mix(p, k, b);
+  }
+
   void main(){
     float asp = uRes.x/uRes.y;
     gDiag = 0.5*length(vec2(asp, 1.0));
@@ -676,6 +1087,18 @@
     else if (uMode == 5) w = mKaleido(p, false);
     else if (uMode == 6) w = mKaleido(p, true);
     else if (uMode == 7) w = mFractal(p);
+    else if (uMode == 9) w = mHexa(p);
+    else if (uMode == 10) w = mQuasi(p);
+    else if (uMode == 11) w = mHyper(p);
+    else if (uMode == 12) w = mEscher(p);
+    else if (uMode == 13) w = mInversion(p);
+    else if (uMode == 14) w = mRosette(p);
+    else if (uMode == 15) w = mPhyllo(p);
+    else if (uMode == 16) w = mSphere(p);
+    else if (uMode == 17) w = mSierpinski(p);
+    else if (uMode == 18) w = mMoire(p);
+    else if (uMode == 19) w = mMoebius(p);
+    else if (uMode == 20) w = mTriangle(p);
     else w = mTunnel(p);
     w = mix(p, w, uGate);                 // gate: mode switch / pause glide every point home
 
@@ -992,22 +1415,28 @@
   #coverflux .cf-detect{margin:-6px 2px 12px;font-size:11px;line-height:1.45;color:var(--cf-mute)}
   #coverflux .cf-link{font-size:11px;font-weight:600;color:var(--cf-mute);padding:2px 4px;border-radius:6px}
   #coverflux .cf-link:hover{color:var(--cf-text)}
-  #coverflux .cf-tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-  #coverflux .cf-tile{position:relative;display:block;padding:10px 34px 10px 12px;border-radius:12px;background:rgba(255,255,255,.035);
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);transition:background .2s ease,box-shadow .2s ease}
-  #coverflux .cf-tile:hover{background:rgba(255,255,255,.07)}
-  #coverflux .cf-tile b{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:650;color:var(--cf-mute);transition:color .2s ease}
-  #coverflux .cf-tile span{display:block;margin-top:3px;font-size:11px;line-height:1.35;color:rgba(243,239,232,.4)}
-  #coverflux .cf-tile i{position:absolute;right:11px;top:11px;width:16px;height:16px;border-radius:50%;
-    box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.22);display:grid;place-items:center;transition:background .2s ease,box-shadow .2s ease}
-  #coverflux .cf-tile i svg{opacity:0;transform:scale(.6);transition:opacity .15s ease,transform .2s var(--cf-ease)}
-  #coverflux .cf-tile[aria-pressed="true"]{background:color-mix(in srgb,var(--cf-accent) 12%,transparent);
-    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cf-accent) 38%,transparent)}
-  #coverflux .cf-tile[aria-pressed="true"] b{color:var(--cf-text)}
-  #coverflux .cf-tile[aria-pressed="true"] span{color:var(--cf-mute)}
-  #coverflux .cf-tile[aria-pressed="true"] i{background:var(--cf-accent);box-shadow:none;color:#111}
-  #coverflux .cf-tile[aria-pressed="true"] i svg{opacity:1;transform:none}
-  #coverflux .cf-tile.cf-running b::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--cf-accent);
+  #coverflux .cf-panel[data-panel="modes"]{width:min(400px,calc(100% - 48px))}
+  #coverflux .cf-list{max-height:min(56vh,520px);overflow-y:auto;margin:0 -6px;padding:0 6px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}
+  #coverflux .cf-group{display:flex;justify-content:space-between;align-items:baseline;margin:14px 8px 4px;font-size:10px;font-weight:700;letter-spacing:.09em;
+    text-transform:uppercase;color:rgba(243,239,232,.42)}
+  #coverflux .cf-group small{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:none}
+  #coverflux .cf-mrow{display:flex;align-items:center;gap:11px;padding:8px 8px;border-radius:11px;cursor:pointer;outline:none;transition:background .15s ease}
+  #coverflux .cf-mrow:hover,#coverflux .cf-mrow:focus-visible{background:rgba(255,255,255,.06)}
+  #coverflux .cf-mrow[aria-checked="true"]{background:color-mix(in srgb,var(--cf-accent) 13%,transparent)}
+  #coverflux .cf-radio{flex:none;width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3);transition:box-shadow .2s ease}
+  #coverflux .cf-mrow[aria-checked="true"] .cf-radio{box-shadow:inset 0 0 0 4px var(--cf-accent)}
+  #coverflux .cf-mt{flex:1;min-width:0}
+  #coverflux .cf-mt b{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:650;color:var(--cf-text)}
+  #coverflux .cf-mt span{display:block;margin-top:1px;font-size:11px;color:var(--cf-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #coverflux .cf-auto{margin-bottom:2px}
+  #coverflux .cf-auto-links{display:flex;gap:2px}
+  #coverflux .cf-check{flex:none;width:18px;height:18px;border-radius:6px;display:grid;place-items:center;color:#111;
+    box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.25);transition:background .15s ease,box-shadow .15s ease}
+  #coverflux .cf-check svg{opacity:0;transform:scale(.6);transition:opacity .15s ease,transform .2s var(--cf-ease)}
+  #coverflux .cf-check[aria-checked="true"]{background:var(--cf-accent);box-shadow:none}
+  #coverflux .cf-check[aria-checked="true"] svg{opacity:1;transform:none}
+  #coverflux .cf-list.cf-solo .cf-check{opacity:.45}
+  #coverflux .cf-mrow.cf-running .cf-mt b::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--cf-accent);
     box-shadow:0 0 8px var(--cf-accent);animation:cf-breathe 1.6s ease-in-out infinite}
   @keyframes cf-breathe{50%{opacity:.35}}
   #coverflux .cf-row{display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px 4px 0;border-top:1px solid var(--cf-line);
@@ -1024,6 +1453,20 @@
     transition:background .2s ease,color .2s ease}
   #coverflux .cf-ratio button:hover{color:var(--cf-text)}
   #coverflux .cf-ratio button[aria-checked="true"]{background:var(--cf-accent);color:#111}
+  #coverflux .cf-lib{margin-top:12px;padding:12px 4px 0;border-top:1px solid var(--cf-line)}
+  #coverflux .cf-lib-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  #coverflux .cf-lib-h b{font-size:12px;font-weight:650}
+  #coverflux .cf-lib-h small{font-size:11px;color:var(--cf-mute);font-variant-numeric:tabular-nums}
+  #coverflux .cf-lib-t{margin:4px 0 10px;font-size:11px;line-height:1.45;color:var(--cf-mute)}
+  #coverflux .cf-lib-b{display:flex;align-items:center;gap:6px}
+  #coverflux .cf-lib-b .cf-link{margin-left:auto}
+  #coverflux .cf-btn{padding:7px 12px;border-radius:9px;font-size:12px;font-weight:650;background:rgba(255,255,255,.07);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);transition:background .2s ease}
+  #coverflux .cf-btn:hover{background:rgba(255,255,255,.12)}
+  #coverflux .cf-btn[disabled]{opacity:.45;pointer-events:none}
+  #coverflux .cf-lib-p{margin-top:10px}
+  #coverflux .cf-lib-p i{display:block;height:3px;border-radius:3px;background:linear-gradient(90deg,var(--cf-accent) var(--p,0%),rgba(255,255,255,.12) var(--p,0%))}
+  #coverflux .cf-lib-p small{display:block;margin-top:6px;font-size:11px;color:var(--cf-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #coverflux .cf-tap{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:100%;height:68px;margin-top:8px;
     border-radius:12px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
     font-size:14px;font-weight:700;letter-spacing:.02em;transition:background .25s ease,transform .12s ease}
@@ -1037,7 +1480,7 @@
   #coverflux.cf-failed .cf-error{display:grid}
   @media (max-width:900px){#coverflux .cf-chip small{display:none}#coverflux .cf-info{max-width:30vw}}
   @media (prefers-reduced-motion:reduce){#coverflux,#coverflux .cf-chrome,#coverflux .cf-panel{transition:none}
-    #coverflux .cf-tile.cf-running b::after{animation:none}}
+    #coverflux .cf-mrow.cf-running .cf-mt b::after{animation:none}}
   `;
   document.head.appendChild(style);
 
@@ -1052,8 +1495,12 @@
     <div class="cf-info cf-chrome"><div class="cf-title"></div><div class="cf-artist"></div></div>
     <div class="cf-note cf-chrome"></div>
     <div class="cf-panel cf-chrome" data-panel="modes" role="dialog" aria-label="Modi">
-      <div class="cf-ph"><b>Modi</b><small class="cf-modes-hint"></small><button class="cf-link cf-all">Alle</button></div>
-      <div class="cf-tiles">${PRESET_KEYS().map((k) => `<button class="cf-tile" data-k="${k}" aria-pressed="true" title="Klicken: in Auto an/aus · Doppelklick: nur diesen Modus"><b>${PRESETS[k].label}</b><span>${PRESETS[k].desc}</span><i><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2l2 2L8 3"/></svg></i></button>`).join("")}</div>
+      <div class="cf-ph"><b>Modus</b><small class="cf-modes-hint"></small></div>
+      <div class="cf-list" role="radiogroup" aria-label="Modus">
+        <div class="cf-mrow cf-auto" role="radio" tabindex="0" data-k="auto"><span class="cf-radio"></span><span class="cf-mt"><b>Auto</b><span class="cf-auto-d"></span></span>
+          <span class="cf-auto-links"><button class="cf-link cf-all">Alle</button><button class="cf-link cf-none">Keine</button></span></div>
+        ${["Fluss", "Symmetrie", "Fraktal", "Raum"].map((g) => `<div class="cf-group">${g}<small>in Auto</small></div>` + PRESET_KEYS().filter((k) => PRESETS[k].group === g).map((k) => `<div class="cf-mrow" role="radio" tabindex="0" data-k="${k}"><span class="cf-radio"></span><span class="cf-mt"><b>${PRESETS[k].label}</b><span>${PRESETS[k].desc}</span></span><button class="cf-check" role="checkbox" data-k="${k}" aria-label="${PRESETS[k].label} in Auto verwenden"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.2l2 2L8 3"/></svg></button></div>`).join("")).join("")}
+      </div>
       <label class="cf-row">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"><span class="cf-val cf-intv"></span></label>
     </div>
     <div class="cf-panel cf-chrome" data-panel="tempo" role="dialog" aria-label="Tempo">
@@ -1063,6 +1510,14 @@
         <button role="radio" data-r="auto">Auto</button><button role="radio" data-r="2" title="halbes Tempo">½</button><button role="radio" data-r="1">1×</button><button role="radio" data-r="0.5" title="doppeltes Tempo">2×</button><button role="radio" data-r="3" title="ein Puls pro Dreiertakt">⅓</button>
       </div>
       <button class="cf-tap" aria-label="Tempo tappen">Tap<small>im Takt klicken oder T drücken · mind. 4×</small></button>
+      <div class="cf-lib">
+        <div class="cf-lib-h"><b>Eigene Beat-Analyse</b><small class="cf-lib-n"></small></div>
+        <p class="cf-lib-t">Analysiert deine Musikdateien direkt hier, ohne Upload. Genauer als Spotifys Analyse und auch für lokale Dateien.</p>
+        <div class="cf-lib-b"><button class="cf-btn cf-lib-dir">Ordner wählen</button><button class="cf-btn cf-lib-files">Dateien</button><button class="cf-link cf-lib-clear">Leeren</button></div>
+        <div class="cf-lib-p" hidden><i></i><small></small></div>
+        <input class="cf-in-dir" type="file" multiple webkitdirectory hidden>
+        <input class="cf-in-files" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.ogg,.opus,.m4a" hidden>
+      </div>
       <label class="cf-row" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
     </div>
     <div class="cf-controls cf-chrome">
@@ -1122,7 +1577,7 @@
   const canvas = $("canvas");
   const elTitle = $(".cf-title"), elArtist = $(".cf-artist"), elInfo = $(".cf-info");
   const elInt = $(".cf-intensity"), elIntV = $(".cf-intv"), elNote = $(".cf-note");
-  const tiles = Array.from(root.querySelectorAll(".cf-tile")), ratioButtons = Array.from(root.querySelectorAll(".cf-ratio button"));
+  const rows = Array.from(root.querySelectorAll(".cf-mrow")), checks = Array.from(root.querySelectorAll(".cf-check")), elList = $(".cf-list"), elAutoD = $(".cf-auto-d"), ratioButtons = Array.from(root.querySelectorAll(".cf-ratio button"));
   const elModesK = $(".cf-modes-k"), elModesV = $(".cf-modes-v"), elModesHint = $(".cf-modes-hint"), elDetect = $(".cf-detect");
   const panels = Array.from(root.querySelectorAll(".cf-panel")), openers = Array.from(root.querySelectorAll("[data-open]"));
   const elSync = $(".cf-syncr"), elSyncV = $(".cf-syncv");
@@ -1149,48 +1604,51 @@
 
   // mode chip + tiles: which modes are on, which one is running right now
   function syncModes() {
-    const on = settings.modes, all = on.length === PRESET_KEYS().length;
-    tiles.forEach((t) => {
-      t.setAttribute("aria-pressed", String(on.includes(t.dataset.k)));
-      t.classList.toggle("cf-running", t.dataset.k === state.presetKey && isOpen);
+    const on = autoOn(), auto = settings.mode === "auto";
+    rows.forEach((r) => {
+      r.setAttribute("aria-checked", String(r.dataset.k === settings.mode));
+      r.classList.toggle("cf-running", r.dataset.k === state.presetKey && isOpen);
     });
-    elModesK.textContent = on.length === 1 ? "Fix" : "Auto";
+    checks.forEach((c) => c.setAttribute("aria-checked", String(on.includes(c.dataset.k))));
+    elList.classList.toggle("cf-solo", !auto);
+    elAutoD.textContent = "wechselt zwischen " + (on.length === PRESET_KEYS().length ? "allen " + on.length : on.length + " von " + PRESET_KEYS().length) + " Modi";
+    elModesK.textContent = auto ? "Auto" : "Modus";
     elModesV.textContent = (PRESETS[state.presetKey] || PRESETS[on[0]]).label;
-    elModesHint.textContent = on.length === 1 ? "Nur " + PRESETS[on[0]].label + " · Klicken fügt Modi hinzu" : all ? "Auto wechselt zwischen allen Modi" : "Auto wechselt zwischen " + on.length + " Modi";
+    elModesHint.textContent = auto ? "Zeile wählt einen festen Modus · Häkchen = in Auto" : "Fest: " + PRESETS[settings.mode].label;
   }
 
-  // popover panels
+
   let openPanel = null;
   function setPanel(name) {
     openPanel = name && name !== openPanel ? name : null;
     panels.forEach((p) => p.classList.toggle("cf-on", p.dataset.panel === openPanel));
     openers.forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.open === openPanel)));
-    if (openPanel === "tempo") refreshStatus();
+    if (openPanel === "tempo") { refreshStatus(); syncLib(); }
   }
   openers.forEach((b) => b.addEventListener("click", () => setPanel(b.dataset.open)));
   root.addEventListener("pointerdown", (e) => { if (openPanel && !e.target.closest(".cf-panel,[data-open]")) setPanel(null); });
 
-  function setModes(next) {
-    settings.modes = PRESET_KEYS().filter((k) => next.includes(k));
-    saveSettings(); syncModes();
-    if (!settings.modes.includes(state.presetKey)) state.pending = true; // glide home, then start an enabled mode
+  function setMode(k) {
+    settings.mode = k; saveSettings(); syncModes();
+    if (k !== "auto" ? state.presetKey !== k : settings.autoOff.includes(state.presetKey)) state.pending = true; // glide home, then switch
   }
-  tiles.forEach((t) => {
-    t.addEventListener("click", () => {
-      const k = t.dataset.k, on = settings.modes;
-      if (on.includes(k)) {
-        if (on.length === 1) { note("Mindestens ein Modus bleibt an"); return; }
-        setModes(on.filter((x) => x !== k));
-      } else setModes(on.concat(k));
-    });
-    t.addEventListener("dblclick", () => {
-      const k = t.dataset.k;
-      const solo = settings.modes.length === 1 && settings.modes[0] === k;
-      setModes(solo ? PRESET_KEYS() : [k]);
-      note(solo ? "Auto: alle Modi" : "Nur " + PRESETS[k].label);
-    });
+  function setAutoOff(list) {
+    settings.autoOff = PRESET_KEYS().filter((k) => list.includes(k));
+    if (settings.autoOff.length >= PRESET_KEYS().length) { settings.autoOff = PRESET_KEYS().filter((k) => k !== PRESET_KEYS()[0]); note("Mindestens ein Modus bleibt in Auto"); }
+    saveSettings(); syncModes();
+    if (settings.mode === "auto" && settings.autoOff.includes(state.presetKey)) state.pending = true;
+  }
+  rows.forEach((r) => {
+    r.addEventListener("click", (e) => { if (!e.target.closest(".cf-check,.cf-link")) setMode(r.dataset.k); });
+    r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMode(r.dataset.k); } });
   });
-  $(".cf-all").addEventListener("click", () => setModes(PRESET_KEYS()));
+  checks.forEach((c) => c.addEventListener("click", () => {
+    const k = c.dataset.k, off = settings.autoOff;
+    if (!off.includes(k) && autoOn().length === 1) { note("Mindestens ein Modus bleibt in Auto"); return; }
+    setAutoOff(off.includes(k) ? off.filter((x) => x !== k) : off.concat(k));
+  }));
+  $(".cf-all").addEventListener("click", () => setAutoOff([]));
+  $(".cf-none").addEventListener("click", () => setAutoOff(PRESET_KEYS().filter((k) => k !== (PRESETS[state.presetKey] ? state.presetKey : PRESET_KEYS()[0]))));
   ratioButtons.forEach((b) => b.addEventListener("click", () => {
     const uri = audio.uri;
     if (!uri) return;
@@ -1250,6 +1708,32 @@
   }
   elTap.addEventListener("click", tap);
 
+  // ---- library UI ----
+  const elLibN = $(".cf-lib-n"), elLibP = $(".cf-lib-p"), elLibBar = $(".cf-lib-p i"), elLibTxt = $(".cf-lib-p small");
+  const elInDir = $(".cf-in-dir"), elInFiles = $(".cf-in-files"), libButtons = [$(".cf-lib-dir"), $(".cf-lib-files")];
+  function syncLib() {
+    elLibN.textContent = !Library.available ? "nicht verfügbar" : Library.size ? Library.size + (Library.size === 1 ? " Song" : " Songs") : "noch leer";
+    libButtons.forEach((b) => { if (Library.busy || !Library.available) b.setAttribute("disabled", ""); else b.removeAttribute("disabled"); });
+  }
+  async function analyseFiles(files) {
+    if (!files || !files.length) return;
+    elLibP.hidden = false;
+    const added = await Library.addFiles(files, (done, total, name) => {
+      elLibBar.style.setProperty("--p", (total ? (done / total) * 100 : 100) + "%");
+      elLibTxt.textContent = total ? done + " / " + total + (name ? " · " + name : "") : "Keine Audiodateien gefunden";
+      syncLib();
+    });
+    elLibTxt.textContent = added ? added + " neu analysiert" : "Nichts Neues – alles schon analysiert";
+    syncLib();
+    if (added) reloadCurrent();
+  }
+  $(".cf-lib-dir").addEventListener("click", () => elInDir.click());
+  $(".cf-lib-files").addEventListener("click", () => elInFiles.click());
+  elInDir.addEventListener("change", () => { analyseFiles(elInDir.files); elInDir.value = ""; });
+  elInFiles.addEventListener("change", () => { analyseFiles(elInFiles.files); elInFiles.value = ""; });
+  $(".cf-lib-clear").addEventListener("click", async () => { await Library.clear(); syncLib(); elLibP.hidden = true; reloadCurrent(); note("Eigene Analysen gelöscht"); });
+  Library.init().then(() => { syncLib(); if (Library.size) reloadCurrent(); });
+
   $(".cf-close").addEventListener("click", () => close());
 
   // idle chrome
@@ -1300,7 +1784,7 @@
 
   // Latched once per cycle, while every point is home – so switching never shows.
   function startCycle(id, len) {
-    const on = settings.modes;
+    const on = settings.mode !== "auto" && PRESETS[settings.mode] ? [settings.mode] : autoOn();
     let key = on[0];
     if (on.length > 1) {
       // energy decides between the calm and the loud characters – among the ones that are switched on
@@ -1470,8 +1954,28 @@
     elBpm.title = live ? "Tempo – der Punkt blinkt auf jedem Beat" : "Keine Audio-Analyse – simulierter Takt";
     const cur = o === undefined ? "auto" : typeof o === "number" ? String(o) : "";
     ratioButtons.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.r === cur)));
-    elDetect.textContent = live ? audio.describe() : "Keine Spotify-Analyse – simulierter Takt";
+    elDetect.textContent = live ? audio.describe() : audio.localMissing ? "Lokale Datei ohne Analyse – simulierter Takt. Unten den Ordner analysieren, dann sitzt der Beat." : "Keine Analyse – simulierter Takt";
     elDetect.title = elDetect.textContent;
+  }
+
+  function trackMeta(item, dur) {
+    const md = (item && item.metadata) || {};
+    const uri = (item && item.uri) || "";
+    let title = md.title || (item && item.name) || "", artist = md.artist_name || (item && item.artists && item.artists.map((x) => x.name).join(", ")) || "";
+    if (/^spotify:local:/.test(uri) && (!title || !artist)) {
+      // spotify:local:<artist>:<album>:<title>:<seconds>
+      const p = uri.split(":").slice(2).map((x) => { try { return decodeURIComponent(x.replace(/\+/g, " ")); } catch (_) { return x; } });
+      artist = artist || p[0] || ""; title = title || p[2] || "";
+    }
+    return { title, artist, duration: dur, local: /^spotify:local:/.test(uri) };
+  }
+  function reloadCurrent() {
+    const item = S.Player.data && (S.Player.data.item || S.Player.data.track);
+    if (!item || !item.uri) return;
+    audio.cache.delete(item.uri);
+    let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
+    state.cycleId = null; state.dissolve = Math.max(state.dissolve, 0.6);
+    audio.load(item.uri, dur, trackMeta(item, dur)).then(refreshStatus);
   }
 
   async function onTrack() {
@@ -1483,7 +1987,7 @@
       currentTrackUri = uri;
       state.cycleId = null; state.dissolve = 1;
       let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
-      audio.load(uri, dur).then(refreshStatus);
+      audio.load(uri, dur, trackMeta(item, dur)).then(refreshStatus);
       refreshStatus();
     }
     if (isOpen) refreshCover(false);
@@ -1561,5 +2065,5 @@
 
   syncControls();
   onTrack();
-  window.Coverflux = { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio, presets: PRESETS };
+  window.Coverflux = { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio, presets: PRESETS, library: Library };
 })();

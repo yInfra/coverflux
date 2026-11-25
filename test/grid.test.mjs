@@ -90,3 +90,23 @@ test("half time picks the strong beat even if Spotify's bars start one beat late
 test("no page errors", () => {
   assert.deepEqual(errors, []);
 });
+
+test("library aligns a file analysis with Spotify's version of the song", async () => {
+  const r = await page.evaluate(() => {
+    let s = 3; const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    const segments = [];
+    for (let t = 0; t < 150; t += 0.18 + rnd() * 0.25) segments.push({ start: t, duration: 0.2, loudness_start: -30, loudness_max: -25 + 18 * rnd() + 6 * Math.sin(t / 7), loudness_max_time: 0.02 });
+    const spot = { track: { duration: 150 }, segments, beats: [], bars: [], sections: [] };
+    const L = window.Coverflux.library;
+    // the downloaded file starts 2.37 s later in the music than the stream (e.g. a cut intro)
+    const own = L.shiftAnalysis({ track: { duration: 150 }, segments, beats: [], bars: [], sections: [] }, -2.37);
+    return L.align(own, spot);
+  });
+  assert.ok(r.ok, `correlation ${r.corr}`);
+  assert.ok(Math.abs(r.shift - 2.37) < 0.02, `shift ${r.shift}`);
+});
+
+test("library matches downloaded file names to tracks", async () => {
+  const n = await page.evaluate(() => [window.Coverflux.library.norm("Señorita (feat. X) - 2019 Remaster"), window.Coverflux.library.norm("Nie mehr")]);
+  assert.deepEqual(n, ["senorita", "nie mehr"]);
+});
