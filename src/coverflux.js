@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.3.0
+// VERSION: 2.4.0
 
 (function Coverflux() {
   "use strict";
@@ -31,12 +31,11 @@
   };
 
   // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
-  function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "shatter", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
+  function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
   const PRESETS = {
     liquid:  { label: "Liquid",  mode: 0, fill: 3.0 },
     vortex:  { label: "Vortex",  mode: 1, fill: 3.0 },
     ripple:  { label: "Ripple",  mode: 2, fill: 1.6 },
-    shatter: { label: "Shatter", mode: 3, fill: 2.0 },
     prism:   { label: "Prism",   mode: 4, fill: 1.8 },
     kaleido: { label: "Kaleido", mode: 5, fill: 3.0 },
     mandala: { label: "Mandala", mode: 6, fill: 3.0 },
@@ -45,7 +44,7 @@
   };
   // Auto mode picks from these depending on the energy of the current song section.
   const CALM_POOL = ["liquid", "ripple", "kaleido", "mandala", "prism"];
-  const LOUD_POOL = ["kaleido", "fractal", "vortex", "shatter", "tunnel", "mandala", "liquid", "prism"];
+  const LOUD_POOL = ["kaleido", "fractal", "vortex", "tunnel", "mandala", "liquid", "prism"];
   const CYCLE_BARS = 16; // one full loop away from the cover and back onto it
 
   /* ------------------------------------------------------------------ */
@@ -808,6 +807,14 @@
     opacity:0;visibility:hidden;transition:opacity .45s cubic-bezier(.2,.7,.2,1),visibility 0s linear .45s;
     font-family:var(--font-family,"SpotifyMixUI",CircularSp,system-ui,sans-serif);color:#f3efe8;}
   #coverflux.cf-open{opacity:1;visibility:visible;transition:opacity .45s cubic-bezier(.2,.7,.2,1),visibility 0s;}
+  #coverflux-glow{position:fixed;left:0;right:0;bottom:0;height:90px;z-index:1000;pointer-events:none;opacity:0;
+    transition:opacity .45s cubic-bezier(.2,.7,.2,1);mix-blend-mode:screen;}
+  #coverflux-glow.cf-open{opacity:1}
+  #coverflux-glow canvas{position:absolute;left:0;width:100%;top:0;height:100%;display:block;
+    -webkit-mask-image:linear-gradient(to bottom,#000 0,rgba(0,0,0,.5) 22%,rgba(0,0,0,.14) 55%,transparent 100%);
+            mask-image:linear-gradient(to bottom,#000 0,rgba(0,0,0,.5) 22%,rgba(0,0,0,.14) 55%,transparent 100%);}
+  #coverflux-glow::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.14) 20%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.14) 80%,transparent);}
   #coverflux canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   #coverflux .cf-drag{position:absolute;left:0;right:0;top:0;height:40px;-webkit-app-region:drag}
   #coverflux.cf-idle{cursor:none}
@@ -900,6 +907,40 @@
       </button>
     </div>`;
   document.body.appendChild(root);
+  // OLED-style reflection: the bottom edge of the visual spills, mirrored and blurred, onto the black playbar
+  const glowEl = document.createElement("div");
+  glowEl.id = "coverflux-glow";
+  glowEl.setAttribute("aria-hidden", "true");
+  const glowCv = document.createElement("canvas");
+  glowEl.appendChild(glowCv);
+  document.body.appendChild(glowEl);
+  const glowCtx = glowCv.getContext("2d", { alpha: false });
+  const glowTmp = document.createElement("canvas");
+  const glowTmpCtx = glowTmp.getContext("2d", { alpha: false });
+  const GLOW_W = 320, GLOW_PAD = 12, GLOW_BLUR = 4;
+  // Mirror at exactly 1:1 scale: the row touching the playbar is the bottom row of the visual, x lines up pixel for pixel.
+  // Blur happens inside the canvas on an edge-padded copy, so it can't pull the reflection away from the edge.
+  function drawGlow(src) {
+    const rw = root.clientWidth, rh = root.clientHeight, gh = glowEl.clientHeight;
+    if (!glowCtx || !glowTmpCtx || !src.width || !src.height || !rw || !rh || !gh) return;
+    const W = GLOW_W, H = Math.max(4, Math.round(W * gh / rw)), P = GLOW_PAD;
+    if (glowCv.width !== W || glowCv.height !== H) { glowCv.width = W; glowCv.height = H; glowTmp.width = W + 2 * P; glowTmp.height = H + 2 * P; }
+    const strip = Math.min(src.height, Math.max(1, Math.round(gh * src.height / rh)));
+    try {
+      const t = glowTmpCtx;
+      t.setTransform(1, 0, 0, -1, 0, P + H + P); // mirror: source bottom row lands at y = P (the playbar edge)
+      t.drawImage(src, 0, src.height - strip, src.width, strip, P, P, W, H);
+      t.setTransform(1, 0, 0, 1, 0, 0);
+      t.drawImage(glowTmp, P, P, W, 1, P, 0, W, P); // pad above the edge with the edge row itself
+      t.drawImage(glowTmp, P, P + H - 1, W, 1, P, P + H, W, P); // and below the far end
+      t.drawImage(glowTmp, P, 0, 1, H + 2 * P, 0, 0, P, H + 2 * P); // pad left/right with the outer columns
+      t.drawImage(glowTmp, P + W - 1, 0, 1, H + 2 * P, P + W, 0, P, H + 2 * P);
+      glowCtx.filter = "blur(" + GLOW_BLUR + "px) saturate(1.5) brightness(1.25)";
+      glowCtx.drawImage(glowTmp, -P, -P);
+      glowCtx.filter = "none";
+    } catch (_) {}
+  }
+
 
   const $ = (sel) => root.querySelector(sel);
   const canvas = $("canvas");
@@ -979,6 +1020,7 @@
   function layout() {
     const bottom = Math.max(0, Math.round(window.innerHeight - playbarTop()));
     root.style.bottom = bottom + "px";
+    glowEl.style.height = Math.max(40, bottom) + "px";
     const w = root.clientWidth, h = root.clientHeight;
     if (!renderer || !w || !h) return;
     const dpr = window.devicePixelRatio || 1;
@@ -1103,6 +1145,7 @@
       hue: state.dir * env * 0.4, glow: env * 0.5, disp: P.mode === 4 ? 0.1 : env * 0.004,
       trail: rm ? 0 : Math.max(0.08 + 0.3 * clamp(env * 1.3), 0.88 * state.dissolve),
     });
+    drawGlow(canvas); // same frame as the WebGL draw, so the buffer is still readable
   }
 
   /* ------------------------------------------------------------------ */
@@ -1216,6 +1259,7 @@
     if (isOpen) return;
     isOpen = true;
     root.classList.add("cf-open");
+    glowEl.classList.add("cf-open");
     root.style.bottom = Math.max(0, Math.round(window.innerHeight - playbarTop())) + "px";
     if (ensureRenderer()) {
       layout();
@@ -1238,6 +1282,7 @@
     isOpen = false;
     cancelAnimationFrame(raf);
     root.classList.remove("cf-open", "cf-idle");
+    glowEl.classList.remove("cf-open");
     document.removeEventListener("keydown", onKey, true);
     button.active = false;
   }
