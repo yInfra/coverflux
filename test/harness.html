@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Coverflux Harness</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:#ddd;font-family:system-ui,sans-serif}
+  .Root__top-container{position:fixed;inset:0 0 90px 0;display:grid;grid-template-columns:280px 1fr;gap:8px;padding:8px}
+  .side,.main{background:#121212;border-radius:8px;padding:16px}
+  .Root__now-playing-bar{position:fixed;left:0;right:0;bottom:0;height:90px;background:#000;display:flex;align-items:center;justify-content:space-between;padding:0 16px;box-sizing:border-box}
+  .extra{display:flex;gap:8px;align-items:center}
+  .extra button{background:none;border:0;color:#bbb;cursor:pointer;padding:8px}
+  .extra button.active{color:#1ed760}
+</style>
+</head>
+<body>
+<div class="Root__top-container"><div class="side">Library</div><div class="main"><h1>Spotify (Mock)</h1><p>Inhalt, der vom Visualizer verdeckt wird.</p></div></div>
+<footer class="Root__now-playing-bar" data-testid="now-playing-bar">
+  <div id="np">Track</div>
+  <div><button id="pp">Play/Pause</button> <button id="next">Next</button></div>
+  <div class="extra" id="extra"><button data-testid="lyrics-button" title="Lyrics">🎤</button></div>
+</footer>
+<script>
+// ---- generated cover art --------------------------------------------------
+function makeCover(seed, hueA, hueB, label){
+  const c = document.createElement('canvas'); c.width = c.height = 640;
+  const g = c.getContext('2d');
+  const grd = g.createLinearGradient(0,0,640,640);
+  grd.addColorStop(0, `hsl(${hueA} 70% 45%)`); grd.addColorStop(1, `hsl(${hueB} 75% 18%)`);
+  g.fillStyle = grd; g.fillRect(0,0,640,640);
+  let s = seed; const r = () => (s = (s*16807)%2147483647)/2147483647;
+  for(let i=0;i<14;i++){ g.beginPath(); g.fillStyle = `hsla(${hueA + r()*80} 80% ${40+r()*40}% / .55)`;
+    g.arc(r()*640, r()*640, 30+r()*150, 0, Math.PI*2); g.fill(); }
+  g.strokeStyle='rgba(255,255,255,.85)'; g.lineWidth=10; g.strokeRect(60,60,520,520);
+  g.fillStyle='#fff'; g.font='bold 92px Georgia'; g.fillText(label, 90, 560);
+  return c.toDataURL('image/png');
+}
+const covers = { a: makeCover(7, 20, 300, 'ECHO'), b: makeCover(99, 190, 250, 'TIDE'), pl: makeCover(42, 90, 160, 'MIX') };
+
+// ---- synthetic "real" analysis with a quiet/loud structure ---------------
+function analysis(dur, tempo, half){
+  const bl = 60/tempo, beats=[], bars=[], sections=[], segments=[];
+  for(let t=0,i=0;t<dur;t+=bl,i++){ beats.push({start:t,duration:bl,confidence:.8}); if(i%4===0) bars.push({start:t,duration:bl*4,confidence:.7}); }
+  const plan = [[0,20,-22],[20,45,-7],[45,60,-24],[60,dur,-5]];
+  for(const [a,b,l] of plan) sections.push({start:a,duration:b-a,loudness:l,tempo});
+  for(let t=0;t<dur;t+=bl/2){ const sec = sections.find(s=>t>=s.start && t<s.start+s.duration) || sections[0];
+    const hb = Math.round(t/bl*2); const on = hb%2===0 && (!half || hb%4===0); const mx = sec.loudness + (on?4:-3);
+    segments.push({start:t,duration:bl/2,loudness_start:on?mx-14:mx-3,loudness_max:mx,loudness_max_time:.02,pitches:[1,.2,.1,.4,.2,.1,.3,.6,.1,.2,.1,.3],timbre:[0,on?60:10,0,0,0,0,0,0,0,0,0,0]}); }
+  return {track:{tempo,loudness:-9,duration:dur,time_signature:4},beats,bars,sections,segments};
+}
+
+// ---- mock Spicetify -------------------------------------------------------
+const tracks = [
+  {uri:'spotify:track:AAA', metadata:{title:'Echo Chamber', artist_name:'Night Index', image_xlarge_url:covers.a}},
+  {uri:'spotify:track:BBB', metadata:{title:'Low Tide, High Noon', artist_name:'Marea', image_xlarge_url:covers.b}},
+  {uri:'spotify:track:CCC', metadata:{title:'Half Time Ghost', artist_name:'Slow Rooms', image_xlarge_url:covers.pl}},
+];
+let ti = 0, playing = true, posBase = 0, posAt = performance.now();
+const listeners = {};
+const fire = (t, data) => (listeners[t]||[]).forEach(f => f({data}));
+const params = new URLSearchParams(location.search);
+window.Spicetify = {
+  Player: {
+    data: { item: tracks[0], context: { uri: 'spotify:playlist:PL1' } },
+    addEventListener(t,f){ (listeners[t] ||= []).push(f); },
+    getProgress(){ return (posBase + (playing ? performance.now()-posAt : 0)); },
+    getDuration(){ return 120000; },
+    isPlaying(){ return playing; },
+  },
+  Playbar: { Button: class { constructor(label, icon, onClick){ const b=document.createElement('button'); b.innerHTML=icon; b.title=label; b.id='cf-btn';
+    this.element=b; b.onclick=()=>onClick(this); document.getElementById('extra').appendChild(b); }
+    set active(v){ this.element.classList.toggle('active', v); } } },
+  LocalStorage: { get:k=>localStorage.getItem(k), set:(k,v)=>localStorage.setItem(k,v) },
+  Platform: { PlaylistAPI: { getMetadata: async () => ({ images:[{url:covers.pl, width:640}] }) } },
+  getAudioData: async (uri) => { if (params.has('noanalysis')) throw new Error('403'); return uri.endsWith('CCC') ? analysis(120,144,true) : analysis(120, uri.endsWith('AAA')?124:92); },
+  colorExtractor: async () => ({ VIBRANT: ti ? '#7fd3ff' : '#ffb27a' }),
+};
+window.mock = {
+  seek(sec){ posBase = sec*1000; posAt = performance.now(); },
+  pause(){ posBase = Spicetify.Player.getProgress(); playing = false; fire('onplaypause'); },
+  play(){ posAt = performance.now(); playing = true; fire('onplaypause'); },
+  next(){ ti = (ti+1)%tracks.length; Spicetify.Player.data = { item: tracks[ti], context:{uri:'spotify:playlist:PL1'} }; posBase = 0; posAt = performance.now(); fire('songchange'); },
+};
+document.getElementById('pp').onclick = () => playing ? mock.pause() : mock.play();
+document.getElementById('next').onclick = () => mock.next();
+setInterval(()=>{ document.getElementById('np').textContent = Spicetify.Player.data.item.metadata.title + ' · ' + (Spicetify.Player.getProgress()/1000).toFixed(1)+'s'; }, 200);
+</script>
+<script src="../src/coverflux.js"></script>
+</body>
+</html>

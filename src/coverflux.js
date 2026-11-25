@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.4.0
+// VERSION: 2.5.0
 
 (function Coverflux() {
   "use strict";
@@ -162,10 +162,16 @@
 
       // ---- beat grid ------------------------------------------------
       this.beats = a.beats;
-      this.tempo = (a.track && a.track.tempo) || (this.beats.length > 1 ? 60 / ((this.beats[this.beats.length - 1].start - this.beats[0].start) / (this.beats.length - 1)) : 120);
-      this.bpb = clamp(Math.round((a.track && a.track.time_signature) || 4), 3, 7);
+      this.spotifyTempo = (a.track && a.track.tempo) || 0;
+      // tempo of the grid we actually follow: median beat length (Spotify's headline number is sometimes off)
+      const durs = this.beats.map((b) => b.duration).filter((d) => d > 0.15 && d < 2.5).sort((x, y) => x - y);
+      this.beatLen = durs.length ? durs[durs.length >> 1] : 60 / (this.spotifyTempo || 120);
+      this.tempo = 60 / this.beatLen;
+      this.spotifyBpb = clamp(Math.round((a.track && a.track.time_signature) || 4), 3, 7);
+      this.bpb = this.spotifyBpb;
       const bars = a.bars && a.bars.length ? a.bars : null;
-      this.d0 = bars ? this.nearestBeat(bars[0].start) : 0;
+      this._d0 = bars ? this.nearestBeat(bars[0].start) : 0;
+      this.shift = 0; this.autoPh = 0; this.onB = null;
       // Each song section starts a fresh morph cycle on its first downbeat.
       this.secAnchor = (a.sections || []).map((s) => {
         let t = s.start;
@@ -195,17 +201,119 @@
       const p95 = sorted[Math.floor(sorted.length * 0.95)] || 1;
       for (let i = 0; i < acc.length; i++) acc[i] = clamp(acc[i] / Math.max(p95, 1e-3));
       this.acc = acc;
+      this.grid = this.synthetic ? null : this.checkGrid(segs);
       this.autoMult = this.synthetic ? 1 : this.detectFeel();
+      if (!this.synthetic) this.autoPh = this.bestPhase(this.autoMult);
+      if (this.grid) console.info("[Coverflux] Raster:", this.describe(), this.grid);
       this._fa = null; this._csi = 0;
+    }
+
+    // Where felt beat 0 sits on Spotify's beat grid: first downbeat + half-beat fix + felt phase (auto or tapped).
+    get d0() {
+      const o = tempoOverrides[this.uri];
+      let ph = this.autoPh;
+      if (o && typeof o === "object") ph = o.ph || 0;
+      else if (typeof o === "number" && o !== this.autoMult) ph = 0;
+      return this._d0 + this.shift + ph;
+    }
+
+    // ---- grid checks (all from Spotify's own segment data, no audio access needed) ----
+    checkGrid(segs) {
+      const B = this.beats, n = B.length;
+      if (n < 24 || !segs.length) return null;
+      // onset strength per segment: loudness attack + timbre change
+      const nd = 12, mean = new Float32Array(nd), sd = new Float32Array(nd);
+      const tv = (g, d) => (g.timbre && g.timbre[d]) || 0;
+      for (const g of segs) for (let d = 0; d < nd; d++) mean[d] += tv(g, d) / segs.length;
+      for (const g of segs) for (let d = 0; d < nd; d++) sd[d] += Math.pow(tv(g, d) - mean[d], 2) / segs.length;
+      for (let d = 0; d < nd; d++) sd[d] = Math.sqrt(sd[d]) || 1;
+      const z = segs.map((g) => Array.from({ length: nd }, (_, d) => (tv(g, d) - mean[d]) / sd[d]));
+      const nov = segs.map((g, i) => {
+        if (!i) return 0;
+        let x = 0; for (let d = 0; d < nd; d++) x += Math.pow(z[i][d] - z[i - 1][d], 2);
+        return Math.sqrt(x);
+      });
+      const novS = nov.slice().sort((x, y) => x - y), novP = novS[Math.floor(novS.length * 0.9)] || 1;
+      const on = segs.map((g, i) => 0.6 * clamp((g.loudness_max - g.loudness_start) / 18) * (0.3 + 0.7 * this.norm(g.loudness_max)) + 0.4 * clamp(nov[i] / novP));
+      const onsetNear = (t, w) => {
+        let best = 0;
+        for (let i = Math.max(0, lastStart(segs, t - w)); i < segs.length && segs[i].start <= t + w; i++) if (segs[i].start >= t - w && on[i] > best) best = on[i];
+        return best;
+      };
+      // 1) is Spotify's grid sitting on the off-beat? onsets on the beats vs. halfway between them
+      let sOn = 0, sOff = 0;
+      const onB = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const w = Math.min(0.06, 0.2 * B[i].duration);
+        onB[i] = onsetNear(B[i].start, w);
+        sOn += onB[i]; sOff += onsetNear(B[i].start + 0.5 * B[i].duration, w);
+      }
+      const offRatio = sOff / Math.max(sOn, 1e-3);
+      if (offRatio > 1.6) this.shift = 0.5;
+      // 2) duple or triple meter? beat-synchronous timbre+chroma self-similarity and accent correlation at 2/3/4/6 beats
+      const feat = [];
+      let j = 0;
+      for (let i = 0; i < n; i++) {
+        const t0 = B[i].start, t1 = t0 + B[i].duration, f = new Float32Array(24);
+        while (j < segs.length && segs[j].start + segs[j].duration <= t0) j++;
+        let wsum = 0;
+        for (let k = j; k < segs.length && segs[k].start < t1; k++) {
+          const g = segs[k], w = Math.max(0, Math.min(t1, g.start + g.duration) - Math.max(t0, g.start));
+          if (w <= 0) continue;
+          for (let d = 0; d < 12; d++) { f[d] += w * z[k][d]; f[12 + d] += w * ((g.pitches && g.pitches[d]) || 0); }
+          wsum += w;
+        }
+        if (wsum > 0) for (let d = 0; d < 24; d++) f[d] /= wsum;
+        feat.push(f);
+      }
+      const cm = new Float32Array(24);
+      for (const f of feat) for (let d = 0; d < 24; d++) cm[d] += f[d] / n;
+      for (const f of feat) for (let d = 0; d < 24; d++) f[d] -= cm[d];
+      const cos = (a, b) => { let ab = 0, aa = 0, bb = 0; for (let d = 0; d < 24; d++) { ab += a[d] * b[d]; aa += a[d] * a[d]; bb += b[d] * b[d]; } return ab / (Math.sqrt(aa * bb) || 1); };
+      const acc = this.acc;
+      let am = 0; for (let i = 0; i < n; i++) am += acc[i] / n;
+      let av = 0; for (let i = 0; i < n; i++) av += Math.pow(acc[i] - am, 2);
+      const sim = (k) => { let x = 0; for (let i = 0; i + k < n; i++) x += cos(feat[i], feat[i + k]); return x / Math.max(1, n - k); };
+      const ac = (k) => { let x = 0; for (let i = 0; i + k < n; i++) x += (acc[i] - am) * (acc[i + k] - am); return x / Math.max(av, 1e-6); };
+      const S = {}; for (const k of [2, 3, 4, 6]) S[k] = sim(k) + 0.5 * ac(k);
+      const tripleScore = (S[3] + S[6]) / 2 - (S[2] + S[4]) / 2;
+      const spotifyTriple = this.spotifyBpb === 3 || this.spotifyBpb === 6;
+      const triple = spotifyTriple ? tripleScore > -0.08 : tripleScore > 0.08;
+      if (triple && !spotifyTriple) this.bpb = 3;
+      if (!triple && spotifyTriple) this.bpb = 4;
+      this.onB = onB;
+      return { offRatio: +offRatio.toFixed(2), tripleScore: +tripleScore.toFixed(3), triple };
+    }
+
+    // For half/third time: which of the Spotify beats is the felt one? (strongest onsets, slight preference for the bar line)
+    bestPhase(m) {
+      if (!(m >= 2) || !this.onB) return 0;
+      const n = this.beats.length, base = Math.round(this._d0 + this.shift);
+      let best = 0, bestS = -1;
+      for (let o = 0; o < m; o++) {
+        let x = 0, c = 0;
+        for (let i = base + o; i < n; i += m) if (i >= 0) { x += this.onB[i] + 0.5 * this.acc[i]; c++; }
+        const sc = (c ? x / c : 0) * (o === 0 ? 1.12 : 1);
+        if (sc > bestS) { bestS = sc; best = o; }
+      }
+      return best;
+    }
+
+    describe() {
+      const m = this.mult(), g = this.grid;
+      return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · Raster " + Math.round(this.tempo) + " BPM" +
+        (g ? (g.triple ? " · Dreiertakt" : " · Zweiertakt") + (this.shift ? " · um ½ Schlag korrigiert" : "") : "") +
+        " → gefühlt " + Math.round(this.tempo / m) + " BPM";
     }
 
     // Section starts in felt beats (cached per tempo feel).
     feltAnchors(m) {
-      if (this._fa && this._faM === m) return this._fa;
+      const d0 = this.d0;
+      if (this._fa && this._faM === m && this._faD === d0) return this._fa;
       const arr = [];
-      for (const b of this.secAnchor) { const f = Math.round((b - this.d0) / m); if (!arr.length || f > arr[arr.length - 1]) arr.push(f); }
+      for (const b of this.secAnchor) { const f = Math.round((b - d0) / m); if (!arr.length || f > arr[arr.length - 1]) arr.push(f); }
       if (!arr.length || arr[0] > 0) arr.unshift(0);
-      this._fa = { arr, total: (this.beats.length - this.d0) / m }; this._faM = m;
+      this._fa = { arr, total: (this.beats.length - d0) / m }; this._faM = m; this._faD = d0;
       return this._fa;
     }
 
@@ -235,16 +343,21 @@
 
     // Spotify often reports double time for songs that *feel* half as fast.
     // Returns how many Spotify beats make one felt beat (2 = halve, 0.5 = double).
+    // The felt pulse stays <= 140 BPM and must fit the meter: triple meter is never halved (every second
+    // pulse would land between the beats) – it goes to one pulse per bar instead.
     detectFeel() {
-      const tempo = this.tempo, acc = this.acc;
-      if (tempo < 58) return 0.5;
-      if (tempo > 140) return 2; // max 140 felt BPM
-      return 1;
+      const T = this.tempo, triple = this.grid && this.grid.triple;
+      const cands = triple ? [1, 3, 0.5] : [1, 2, 0.5, 4];
+      const lo = triple ? 40 : 55, hi = 140;
+      const dist = (m) => Math.abs(Math.log2(T / m / 100));
+      const pool = cands.filter((m) => T / m >= lo && T / m <= hi);
+      return (pool.length ? pool : cands).reduce((b, m) => (dist(m) < dist(b) ? m : b));
     }
 
     mult(uri) {
       const o = tempoOverrides[uri || this.uri];
-      return o === 0.5 || o === 1 || o === 2 ? o : this.autoMult || 1;
+      if (o && typeof o === "object" && o.m > 0.2 && o.m < 8) return o.m;
+      return o === 0.5 || o === 1 || o === 2 || o === 3 ? o : this.autoMult || 1;
     }
 
     nearestBeat(t) {
@@ -855,6 +968,8 @@
   #coverflux .cf-val{min-width:44px;font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;color:#f3efe8;font-size:11px}
   #coverflux .cf-pill{display:flex;align-items:center;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;color:#f3efe8;transition:background .2s ease}
   #coverflux .cf-pill:hover{background:rgba(255,255,255,.08)}
+  #coverflux .cf-tap.cf-hit{background:rgba(255,255,255,.16)}
+  #coverflux .cf-dot{transform:scale(calc(1 + var(--cf-beat, 0) * .9));will-change:transform}
   #coverflux .cf-bpm{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;
     font-variant-numeric:tabular-nums;color:#f3efe8;transition:background .2s ease}
   #coverflux .cf-bpm:hover{background:rgba(255,255,255,.08)}
@@ -901,6 +1016,7 @@
       <label class="cf-field cf-sync" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync
         <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
       <button class="cf-pill cf-frame" aria-label="Bildfläche umschalten: Vollbild gespiegelt oder Quadrat"></button>
+      <button class="cf-pill cf-tap" aria-label="Tempo tappen: im Takt klicken oder T drücken" title="Im Takt klicken oder T drücken (mind. 4×). Setzt Tempo und Beat-Lage für diesen Song.">Tap</button>
       <button class="cf-bpm" aria-label="Tempo-Gefühl umschalten"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
       <button class="cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
@@ -984,13 +1100,48 @@
   const setSync = (ms) => { settings.syncMs = clamp(Math.round(ms / 10) * 10, -250, 250); saveSettings(); syncControls(); };
   elSync.addEventListener("input", () => setSync(+elSync.value));
   elFrame.addEventListener("click", () => { settings.frame = settings.frame === "square" ? "full" : "square"; saveSettings(); syncControls(); });
+  // Tap tempo: the final safety net. Taps are measured on Spotify's beat grid, so tempo drift in the song is kept.
+  const elTap = $(".cf-tap");
+  let taps = [], tapHit = 0;
+  function tap() {
+    const uri = audio.uri;
+    if (!uri || audio.synthetic) { note("Tap braucht die Spotify-Analyse"); return; }
+    const now = performance.now();
+    if (taps.length && now - taps[taps.length - 1].now > 2200) taps = [];
+    const pos = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0) + settings.syncMs / 1000;
+    taps.push({ now, B: audio.beatPos(pos) });
+    if (taps.length > 16) taps.shift();
+    elTap.classList.add("cf-hit"); clearTimeout(tapHit); tapHit = setTimeout(() => elTap.classList.remove("cf-hit"), 90);
+    if (taps.length < 4) { note("Tap " + taps.length + " … weiter im Takt"); return; }
+    const d = [];
+    for (let i = 1; i < taps.length; i++) d.push(taps[i].B - taps[i - 1].B);
+    d.sort((x, y) => x - y);
+    const r = d[d.length >> 1];
+    if (!(r > 0.2)) return;
+    // snap to a clean ratio of the grid when close, else keep the tapped ratio (Spotify's grid is off)
+    let m = r;
+    for (const c of [0.5, 1, 2, 3, 4, 1.5]) if (Math.abs(Math.log2(r / c)) < 0.12) { m = c; break; }
+    m = Math.round(m * 100) / 100;
+    // phase: circular mean of the taps on the felt grid
+    const base = audio._d0 + audio.shift;
+    let sx = 0, sy = 0;
+    for (const t of taps) { const a = 2 * Math.PI * ((t.B - base) / m); sx += Math.cos(a); sy += Math.sin(a); }
+    const phFelt = Math.atan2(sy, sx) / (2 * Math.PI); // -0.5..0.5 felt beats
+    const prev = audio.mult();
+    tempoOverrides[uri] = { m, ph: Math.round(phFelt * m * 1000) / 1000 };
+    saveTempo(); refreshStatus();
+    if (Math.abs(prev - m) > 1e-3) { state.cycleId = null; state.dissolve = Math.max(state.dissolve, 0.6); }
+    note("Tap: " + Math.round(audio.tempo / m) + " BPM · Beat gesetzt");
+  }
+  elTap.addEventListener("click", tap);
+
   elBpm.addEventListener("click", () => {
     const uri = audio.uri;
     if (!uri) return;
-    // cycle: Auto -> halbe -> normal -> doppelte -> Auto
-    const order = [undefined, 2, 1, 0.5];
+    // cycle: Auto -> halbe -> normal -> doppelte -> drittel -> Auto (a tapped setting counts as "fixed" and goes back to Auto)
+    const order = [undefined, 2, 1, 0.5, 3];
     const cur = tempoOverrides[uri];
-    const next = order[(order.indexOf(cur) + 1) % order.length];
+    const next = typeof cur === "object" ? undefined : order[(order.indexOf(cur) + 1) % order.length];
     if (next === undefined) delete tempoOverrides[uri]; else tempoOverrides[uri] = next;
     saveTempo(); refreshStatus(); state.pending = true;
     note(next === undefined ? "Tempo: automatisch erkannt" : "Tempo für diesen Song fixiert");
@@ -1112,6 +1263,7 @@
     state.felt = F;
     const Fi = Math.floor(F), Ff = F - Fi;
     if (live) state.flow = Fi + ease(Ff);
+    elDot.style.setProperty("--cf-beat", live && !rm ? Math.exp(-Ff * 7).toFixed(3) : "0");
 
     // gate: glides every point home for a manual mode change or a pause, then back out
     if (state.pending || !live) {
@@ -1202,14 +1354,15 @@
   function refreshStatus() {
     const live = !audio.synthetic;
     const m = audio.mult();
-    const fixed = tempoOverrides[audio.uri] !== undefined;
+    const o = tempoOverrides[audio.uri];
+    const ratio = m === 2 ? "½" : m === 3 ? "⅓" : m === 0.5 ? "2×" : m === 4 ? "¼" : m === 1 ? "1×" : "";
     elDot.classList.toggle("cf-live", live);
     elBpmV.textContent = Math.round(audio.tempo / m) + " BPM";
-    elBpmM.textContent = !live ? "simuliert" : fixed ? (m === 2 ? "½ fix" : m === 0.5 ? "2× fix" : "1× fix") : m !== 1 ? (m === 2 ? "auto ½" : "auto 2×") : "auto";
+    elBpmM.textContent = !live ? "simuliert" : typeof o === "object" ? "tap" : o !== undefined ? ratio + " fix" : m !== 1 ? "auto " + ratio : "auto";
     elBpm.title = (live
-      ? "Spotify-Analyse: Beats, Takte und Abschnitte des Songs steuern die Visuals."
+      ? "Spotify-Analyse: " + audio.describe() + "."
       : "Keine Audio-Analyse verfügbar – die Bewegung folgt einem simulierten Takt, nicht der echten Musik.")
-      + "\nSpotify meldet " + Math.round(audio.tempo) + " BPM. Klicken: Auto → halbes → normales → doppeltes Tempo (wird pro Song gespeichert).";
+      + "\nDer Punkt blinkt auf jedem Beat. Falsch? Klicken: Auto → ½ → 1× → 2× → ⅓, oder mit Tap (T) einklopfen. Wird pro Song gespeichert.";
   }
 
   async function onTrack() {
@@ -1248,6 +1401,7 @@
   function onKey(e) {
     if (!isOpen) return;
     if (e.key === "Escape") { e.stopPropagation(); close(); }
+    else if ((e.key === "t" || e.key === "T") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) { e.stopPropagation(); tap(); }
     else if ((e.key === "[" || e.key === "]") && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) {
       e.stopPropagation();
       setSync(settings.syncMs + (e.key === "]" ? 10 : -10));

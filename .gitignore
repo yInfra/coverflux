@@ -1,0 +1,7 @@
+# local copies of old versions – the git history (tags v1, v2.0 …) replaces them
+backup/
+node_modules/
+*.log
+*.png
+.DS_Store
+Thumbs.db
