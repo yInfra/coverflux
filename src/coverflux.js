@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
-// DESCRIPTION: Turns everything above the playbar into an audio-reactive visualizer that morphs the current cover art – and breathes back to the original image in calm passages.
-// VERSION: 1.0.0
+// DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art away and back – one breath every two bars.
+// VERSION: 2.0.0
 
 (function Coverflux() {
   "use strict";
@@ -17,39 +17,42 @@
   /* Settings                                                            */
   /* ------------------------------------------------------------------ */
   const SETTINGS_KEY = "coverflux:settings";
-  const DEFAULTS = { source: "track", intensity: 0.7, mode: "auto", showInfo: true };
-  const settings = (() => {
-    try {
-      return Object.assign({}, DEFAULTS, JSON.parse(S.LocalStorage.get(SETTINGS_KEY) || "{}"));
-    } catch (_) {
-      return Object.assign({}, DEFAULTS);
-    }
-  })();
-  const saveSettings = () => {
-    try { S.LocalStorage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+  const TEMPO_KEY = "coverflux:tempo"; // per-track tempo-feel overrides
+  const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", showInfo: true, syncMs: 0 };
+  const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(S.LocalStorage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
+  const settings = loadJSON(SETTINGS_KEY, DEFAULTS);
+  if (!PRESET_KEYS().includes(settings.mode) && settings.mode !== "auto") settings.mode = "auto";
+  const tempoOverrides = loadJSON(TEMPO_KEY, {});
+  const saveSettings = () => { try { S.LocalStorage.set(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
+  const saveTempo = () => {
+    const keys = Object.keys(tempoOverrides);
+    if (keys.length > 300) delete tempoOverrides[keys[0]];
+    try { S.LocalStorage.set(TEMPO_KEY, JSON.stringify(tempoOverrides)); } catch (_) {}
   };
 
-  // Morph presets. Weights: [liquid, vortex, tunnel, ripple, shatter, kaleido]
+  // One morph character at a time. `fill` = how far the sharp, mirrored cover spreads beyond its square while morphing.
+  function PRESET_KEYS() { return ["liquid", "vortex", "ripple", "shatter", "prism", "kaleido", "mandala", "fractal", "tunnel"]; }
   const PRESETS = {
-    liquid:  { label: "Liquid",   w: [1.0, 0.25, 0.0, 0.0, 0.0, 0.0] },
-    vortex:  { label: "Vortex",   w: [0.3, 1.0, 0.35, 0.0, 0.0, 0.0] },
-    tunnel:  { label: "Tunnel",   w: [0.2, 0.35, 1.0, 0.3, 0.0, 0.0] },
-    ripple:  { label: "Ripple",   w: [0.45, 0.0, 0.0, 1.0, 0.0, 0.0] },
-    shatter: { label: "Shatter",  w: [0.3, 0.0, 0.0, 0.0, 1.0, 0.0] },
-    kaleido: { label: "Kaleido",  w: [0.35, 0.45, 0.0, 0.0, 0.0, 1.0] },
-    prism:   { label: "Prism",    w: [0.5, 0.0, 0.45, 0.0, 0.35, 0.55] },
+    liquid:  { label: "Liquid",  mode: 0, fill: 1.0 },
+    vortex:  { label: "Vortex",  mode: 1, fill: 1.2 },
+    ripple:  { label: "Ripple",  mode: 2, fill: 1.3 },
+    shatter: { label: "Shatter", mode: 3, fill: 1.5 },
+    prism:   { label: "Prism",   mode: 4, fill: 1.6 },
+    kaleido: { label: "Kaleido", mode: 5, fill: 3.0 },
+    mandala: { label: "Mandala", mode: 6, fill: 3.0 },
+    fractal: { label: "Fractal", mode: 7, fill: 3.0 },
+    tunnel:  { label: "Tunnel",  mode: 8, fill: 0.12 },
   };
-  const AUTO_ORDER = ["liquid", "vortex", "shatter", "tunnel", "kaleido", "ripple", "prism"];
+  // Auto mode picks from these depending on the energy of the current song section.
+  const CALM_POOL = ["liquid", "ripple", "kaleido", "vortex", "mandala"];
+  const LOUD_POOL = ["fractal", "kaleido", "prism", "shatter", "tunnel", "mandala", "vortex", "liquid", "ripple"];
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                             */
   /* ------------------------------------------------------------------ */
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
   const lerp = (a, b, t) => a + (b - a) * t;
-  const follow = (cur, target, up, down, dt) => {
-    const rate = target > cur ? up : down;
-    return cur + (target - cur) * (1 - Math.exp(-rate * dt));
-  };
+  const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
   const hashStr = (s) => {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -77,13 +80,14 @@
     return sorted[0].url || sorted[0].uri || null;
   };
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+  const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
 
   /* ------------------------------------------------------------------ */
   /* Audio model – Spotify audio analysis, with honest synthetic fallback */
   /* ------------------------------------------------------------------ */
   function buildSynthetic(uri, durationSec) {
     const rnd = mulberry(hashStr(uri || "x"));
-    const tempo = 96 + Math.floor(rnd() * 40);
+    const tempo = 96 + Math.floor(rnd() * 30);
     const beatLen = 60 / tempo;
     const dur = Math.max(30, durationSec || 210);
     const beats = [], bars = [], sections = [], segments = [];
@@ -102,14 +106,20 @@
       const base = sections[si].loudness;
       const onBeat = Math.abs((t / beatLen) % 1) < 0.01;
       const max = base + (onBeat ? 3 : -2) + rnd() * 2;
-      const pitches = Array.from({ length: 12 }, () => rnd() * 0.4);
-      pitches[(si * 5 + (onBeat ? 0 : 7)) % 12] = 1;
       segments.push({
         start: t, duration: beatLen / 2, loudness_start: max - 8 - rnd() * 4, loudness_max: max,
-        loudness_max_time: 0.02, pitches, timbre: [0, rnd() * 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        loudness_max_time: 0.02, timbre: [0, rnd() * 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       });
     }
-    return { synthetic: true, track: { tempo, loudness: -9, duration: dur }, beats, bars, sections, segments };
+    return { synthetic: true, track: { tempo, loudness: -9, duration: dur, time_signature: 4 }, beats, bars, sections, segments };
+  }
+
+  // Binary search: index of the last item with start <= t (or -1).
+  function lastStart(list, t) {
+    if (!list || !list.length || list[0].start > t) return -1;
+    let lo = 0, hi = list.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (list[m].start <= t) lo = m; else hi = m - 1; }
+    return lo;
   }
 
   class AudioModel {
@@ -125,7 +135,7 @@
         if (typeof S.getAudioData === "function") data = await withTimeout(S.getAudioData(uri), 9000);
       } catch (_) { data = null; }
       if (this.uri !== uri) return;
-      const ok = data && Array.isArray(data.segments) && data.segments.length > 8 && Array.isArray(data.beats);
+      const ok = data && Array.isArray(data.segments) && data.segments.length > 8 && Array.isArray(data.beats) && data.beats.length > 8;
       const analysis = ok ? data : buildSynthetic(uri, durationSec);
       if (this.cache.size > 24) this.cache.delete(this.cache.keys().next().value);
       this.cache.set(uri, analysis);
@@ -135,9 +145,10 @@
     set(a) {
       this.a = a;
       this.synthetic = !!a.synthetic;
-      this.si = 0; this.bi = 0; this.bri = 0; this.sei = 0;
+      this.si = 0; this.sei = 0; this.bpi = 0;
+      const segs = a.segments;
       // Per-track adaptive loudness range (10th..96th percentile of segment peaks)
-      const peaks = a.segments.map((s) => s.loudness_max).sort((x, y) => x - y);
+      const peaks = segs.map((s) => s.loudness_max).sort((x, y) => x - y);
       this.lo = peaks[Math.floor(peaks.length * 0.1)] ?? -30;
       this.hi = peaks[Math.floor(peaks.length * 0.96)] ?? -4;
       if (this.hi - this.lo < 6) this.lo = this.hi - 6;
@@ -145,23 +156,100 @@
       this.secLo = secL.length ? secL[0] : -20;
       this.secHi = secL.length ? secL[secL.length - 1] : -5;
       if (this.secHi - this.secLo < 4) this.secLo = this.secHi - 4;
-      const timb = a.segments.map((s) => (s.timbre ? s.timbre[1] : 0)).sort((x, y) => x - y);
-      this.brLo = timb[Math.floor(timb.length * 0.1)] ?? -50;
-      this.brHi = timb[Math.floor(timb.length * 0.9)] ?? 100;
+
+      // ---- beat grid ------------------------------------------------
+      this.beats = a.beats;
+      this.tempo = (a.track && a.track.tempo) || (this.beats.length > 1 ? 60 / ((this.beats[this.beats.length - 1].start - this.beats[0].start) / (this.beats.length - 1)) : 120);
+      this.bpb = clamp(Math.round((a.track && a.track.time_signature) || 4), 3, 7);
+      const bars = a.bars && a.bars.length ? a.bars : null;
+      this.d0 = bars ? this.nearestBeat(bars[0].start) : 0;
+      // Each song section starts a fresh morph cycle on its first downbeat.
+      this.secAnchor = (a.sections || []).map((s) => {
+        let t = s.start;
+        if (bars) {
+          const i = lastStart(bars, s.start + 0.25);
+          const cands = [bars[Math.max(0, i)], bars[Math.min(bars.length - 1, i + 1)]];
+          t = cands.reduce((best, b) => (Math.abs(b.start - s.start) < Math.abs(best.start - s.start) ? b : best)).start;
+        }
+        return this.nearestBeat(t);
+      });
+
+      // ---- accent per beat: strongest attack of a segment starting near the beat ----
+      const acc = new Float32Array(this.beats.length);
+      let j = 0;
+      for (let i = 0; i < this.beats.length; i++) {
+        const bt = this.beats[i].start;
+        while (j < segs.length && segs[j].start < bt - 0.07) j++;
+        let best = 0;
+        for (let k = j; k < segs.length && segs[k].start <= bt + 0.07; k++) {
+          const s = segs[k];
+          const att = clamp((s.loudness_max - s.loudness_start) / 20) * (0.3 + 0.7 * this.norm(s.loudness_max));
+          if (att > best) best = att;
+        }
+        acc[i] = best;
+      }
+      const sorted = Array.from(acc).sort((x, y) => x - y);
+      const p95 = sorted[Math.floor(sorted.length * 0.95)] || 1;
+      for (let i = 0; i < acc.length; i++) acc[i] = clamp(acc[i] / Math.max(p95, 1e-3));
+      this.acc = acc;
+      this.autoMult = this.synthetic ? 1 : this.detectFeel();
     }
 
-    // Find index of last item with start <= t, using a moving cursor (fast for monotonic time)
+    // Spotify often reports double time for songs that *feel* half as fast.
+    // Returns how many Spotify beats make one felt beat (2 = halve, 0.5 = double).
+    detectFeel() {
+      const tempo = this.tempo, acc = this.acc;
+      if (tempo < 58) return 0.5;
+      if (tempo < 112) return 1;
+      let even = 0, odd = 0, ne = 0, no = 0;
+      for (let i = 0; i < acc.length; i++) {
+        if (((i - this.d0) % 2 + 2) % 2 === 0) { even += acc[i]; ne++; } else { odd += acc[i]; no++; }
+      }
+      const ratio = (even / Math.max(ne, 1) + 0.02) / (odd / Math.max(no, 1) + 0.02);
+      this.parity = ratio;
+      if (tempo >= 152) return ratio > 0.75 ? 2 : 1;
+      if (tempo >= 128 && ratio > 1.22) return 2;
+      if (ratio > 1.55) return 2;
+      return 1;
+    }
+
+    mult(uri) {
+      const o = tempoOverrides[uri || this.uri];
+      return o === 0.5 || o === 1 || o === 2 ? o : this.autoMult || 1;
+    }
+
+    nearestBeat(t) {
+      const b = this.beats;
+      const i = lastStart(b, t);
+      if (i < 0) return 0;
+      if (i < b.length - 1 && Math.abs(b[i + 1].start - t) < Math.abs(b[i].start - t)) return i + 1;
+      return i;
+    }
+
+    // Continuous position on the Spotify beat grid (beat index + fraction).
+    beatPos(t) {
+      const b = this.beats;
+      if (!b || !b.length) return t * 2;
+      if (t < b[0].start) return (t - b[0].start) / Math.max(b[0].duration, 0.2);
+      let i = clamp(this.bpi, 0, b.length - 1);
+      if (b[i].start > t || (i < b.length - 1 && b[i + 1].start <= t && b[Math.min(b.length - 1, i + 8)].start <= t)) i = lastStart(b, t);
+      while (i < b.length - 1 && b[i + 1].start <= t) i++;
+      this.bpi = i;
+      const be = b[i];
+      const frac = (t - be.start) / Math.max(be.duration, 0.05);
+      return i + (i < b.length - 1 ? Math.min(frac, 1) : frac);
+    }
+
+    accentAt(beatIndex) {
+      const i = Math.round(beatIndex);
+      return this.acc && i >= 0 && i < this.acc.length ? this.acc[i] : 0.5;
+    }
+
     seek(list, cursor, t) {
       if (!list || !list.length) return -1;
       let i = clamp(cursor, 0, list.length - 1);
-      if (list[i].start > t) {
-        // jumped backwards: binary search
-        let lo = 0, hi = list.length - 1;
-        while (lo < hi) { const m = (lo + hi + 1) >> 1; if (list[m].start <= t) lo = m; else hi = m - 1; }
-        return list[lo].start <= t ? lo : -1;
-      }
+      if (list[i].start > t) return lastStart(list, t);
       while (i < list.length - 1 && list[i + 1].start <= t) i++;
-      if (i - cursor > 64) { /* fine */ }
       return i;
     }
 
@@ -169,46 +257,17 @@
 
     sample(t) {
       const a = this.a;
-      const out = { loud: 0, beat: 0, bar: 0, onset: 0, section: 0, sectionLoud: 0.5, barIndex: 0, beatIndex: 0, pitch: 0, bright: 0.5, tempo: 120 };
+      const out = { loud: 0, section: 0, sectionLoud: 0.5 };
       if (!a) return out;
-      out.tempo = (a.track && a.track.tempo) || 120;
-
       const si = this.seek(a.segments, this.si, t);
       if (si >= 0) {
         this.si = si;
-        const s = a.segments[si];
-        const nx = a.segments[si + 1];
-        const dt = t - s.start;
+        const s = a.segments[si], nx = a.segments[si + 1];
+        const dt = t - s.start, lmt = s.loudness_max_time || 0;
         let db;
-        const lmt = s.loudness_max_time || 0;
         if (dt < lmt) db = lerp(s.loudness_start, s.loudness_max, dt / Math.max(lmt, 1e-3));
-        else {
-          const end = nx ? nx.loudness_start : s.loudness_max - 12;
-          db = lerp(s.loudness_max, end, clamp((dt - lmt) / Math.max(s.duration - lmt, 1e-3)));
-        }
+        else db = lerp(s.loudness_max, nx ? nx.loudness_start : s.loudness_max - 12, clamp((dt - lmt) / Math.max(s.duration - lmt, 1e-3)));
         out.loud = this.norm(db);
-        const attack = clamp((s.loudness_max - s.loudness_start) / 18);
-        out.onset = attack * Math.exp(-dt * 9) * this.norm(s.loudness_max);
-        if (s.pitches) {
-          let best = 0; for (let k = 1; k < 12; k++) if (s.pitches[k] > s.pitches[best]) best = k;
-          out.pitch = best;
-        }
-        if (s.timbre) out.bright = clamp((s.timbre[1] - this.brLo) / Math.max(this.brHi - this.brLo, 1));
-      }
-      const bi = this.seek(a.beats, this.bi, t);
-      if (bi >= 0) {
-        this.bi = bi;
-        const b = a.beats[bi];
-        const ph = (t - b.start) / Math.max(b.duration, 0.05);
-        out.beat = Math.exp(-ph * 4.5) * clamp(0.45 + (b.confidence || 0) * 0.8);
-        out.beatIndex = bi;
-      }
-      const bri = this.seek(a.bars, this.bri, t);
-      if (bri >= 0) {
-        this.bri = bri;
-        const b = a.bars[bri];
-        out.bar = Math.exp(-((t - b.start) / Math.max(b.duration, 0.2)) * 3);
-        out.barIndex = bri;
       }
       const sei = this.seek(a.sections, this.sei, t);
       if (sei >= 0) {
@@ -227,147 +286,232 @@
   in vec2 aPos; out vec2 vUv;
   void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }`;
 
-  const COMMON = `
-  float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
-  float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.0-2.0*f);
-    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y); }
-  float fbm(vec2 p){ float a=0.5, s=0.0; for(int i=0;i<4;i++){ s+=a*noise(p); p=p*2.03+vec2(1.7,9.2); a*=0.5; } return s; }
-  vec2 curl(vec2 p){ float e=0.02;
-    float n1=fbm(p+vec2(0,e)), n2=fbm(p-vec2(0,e)), n3=fbm(p+vec2(e,0)), n4=fbm(p-vec2(e,0));
-    return vec2(n1-n2, -(n3-n4))/(2.0*e); }
-  vec3 hueShift(vec3 c, float a){ const vec3 k = vec3(0.57735); float ca=cos(a);
-    return c*ca + cross(k,c)*sin(a) + k*dot(k,c)*(1.0-ca); }
-  `;
-
-  const TARGET = `
-  vec3 target(vec2 uv){
-    float asp = uRes.x/uRes.y;
-    vec2 p = (uv-0.5)*vec2(asp,1.0);
-    vec2 q = p/uSquare + 0.5;                  // cover space
-    vec2 m = 1.0 - abs(1.0 - mod(q, 2.0));      // mirrored continuation
-    float d = max(abs(q.x-0.5), abs(q.y-0.5)) - 0.5; // >0 outside cover
-    vec3 sharpC = mix(textureLod(uImgA, clamp(q,0.0,1.0), 0.0).rgb, textureLod(uImgB, clamp(q,0.0,1.0), 0.0).rgb, uMix);
-    vec3 blurC  = mix(textureLod(uImgA, m, 6.0).rgb, textureLod(uImgB, m, 6.0).rgb, uMix);
-    float shadow = 1.0 - 0.75*exp(-max(d,0.0)*9.0);
-    vec3 amb = blurC * (0.10 + 0.32*exp(-max(d,0.0)*1.6)) * shadow;
-    return mix(sharpC, amb, smoothstep(-0.0015, 0.0015, d));
-  }
-  `;
-
-  // Feedback pass: warps the previous frame and pulls it back toward the original cover.
-  const FEEDBACK = `#version 300 es
+  // Scene: every pixel is a point that travels along a deterministic path away from its place in the
+  // cover and back. uA = how far along (0 = the untouched original). No frame-to-frame accumulation,
+  // so nothing drifts and nothing jitters; uPrev only adds a short motion trail.
+  const SCENE = `#version 300 es
   precision highp float;
   in vec2 vUv; out vec4 o;
-  uniform sampler2D uPrev, uImgA, uImgB;
+  uniform sampler2D uImgA, uImgB, uPrev;
   uniform vec2 uRes;
-  uniform float uTime, uDt, uMix, uEnergy, uBeat, uBar, uOnset, uRestore, uAmount, uHue, uBeatCount, uTrans, uSquare, uSeed, uSharp;
-  uniform float uW[6];
-  ${COMMON}
-  ${TARGET}
+  uniform float uMix, uSquare, uA, uFill, uFlow, uPulse, uU, uSeed, uSegs, uHue, uTrail, uGlow, uDisp, uBloom;
+  uniform int uMode;
+  const float TAU = 6.2831853;
+  mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,s,-s,c); }
+  vec2 hash22(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*vec3(.1031,.1030,.0973)); p3 += dot(p3, p3.yzx+33.33); return fract((p3.xx+p3.yz)*p3.zy); }
+  vec3 hueShift(vec3 c, float a){ const vec3 k = vec3(0.57735); float ca=cos(a); return c*ca + cross(k,c)*sin(a) + k*dot(k,c)*(1.0-ca); }
+  vec2 clampLen(vec2 v, float m){ float l = length(v); return l > m ? v*(m/l) : v; }
+
+  vec2 gGx, gGy; float gShade, gSpec, gEdge, gRim; vec2 gDispV;
+
+  vec2 mirror(vec2 q){ return 1.0 - abs(1.0 - mod(q, 2.0)); }
+  vec3 img(vec2 m){ return mix(textureGrad(uImgA, m, gGx, gGy).rgb, textureGrad(uImgB, m, gGx, gGy).rgb, uMix); }
+  vec3 imgLod(vec2 m, float l){ return mix(textureLod(uImgA, m, l).rgb, textureLod(uImgB, m, l).rgb, uMix); }
+  // cover space q: [0,1]^2 is the cover square. Outside: blurred ambient – unless fill spreads the sharp mirrored cover.
+  vec3 cover(vec2 q, float fill){
+    vec2 m = mirror(q);
+    float d = max(abs(q.x-0.5), abs(q.y-0.5)) - 0.5;
+    float soft = 0.0018 + 0.07*clamp(fill, 0.0, 1.0);
+    float mask = smoothstep(-soft, soft, d - fill);
+    vec3 c = img(m);
+    if (mask > 0.0) {
+      float dd = max(d - fill, 0.0);
+      vec3 amb = imgLod(m, 6.0) * (0.10 + 0.32*exp(-dd*1.6)) * (1.0 - 0.75*exp(-dd*9.0));
+      c = mix(c, amb, mask);
+    }
+    return c;
+  }
+  vec3 colorAt(vec2 w, vec2 gx, vec2 gy, float fill){
+    float lim = 6.0/(uRes.y*uSquare);
+    gGx = clampLen(gx/uSquare, lim); gGy = clampLen(gy/uSquare, lim);
+    vec2 q = w/uSquare + 0.5;
+    vec2 dv = (gDispV + (q-0.5)) * uDisp;
+    vec3 c = vec3(cover(q+dv, fill).r, cover(q, fill).g, cover(q-dv, fill).b);
+    if (uGlow > 0.001) c += max(imgLod(mirror(q), 3.5) - 0.55, 0.0) * uGlow;
+    return c;
+  }
+
+  /* ---- morph characters ---- */
+  vec2 liquidRaw(vec2 p, float A){
+    vec2 w = p; float t = uFlow*0.42 + uSeed; float amp = A*0.6;
+    for (int i=1; i<=6; i++){ float fi = float(i);
+      w.x += amp/fi * sin(fi*1.9*w.y + t*(0.55+0.12*fi) + 1.3*fi + uSeed);
+      w.y += amp/fi * cos(fi*1.6*w.x - t*(0.48+0.10*fi) - 0.7*fi);
+    }
+    w += A*0.045*vec2(sin(w.y*9.0 + t*1.3), cos(w.x*8.0 - t*1.1));
+    return w;
+  }
+  // anchored at the centre so the picture never slides off in one direction
+  vec2 wLiquid(vec2 p, float A){ return liquidRaw(p, A) - liquidRaw(vec2(0.0), A); }
+
+  vec2 wVortex(vec2 p, float A){
+    float t = uFlow*0.3 + uSeed; float dir = sin(uSeed*7.0) > 0.0 ? 1.0 : -1.0;
+    float r2 = dot(p,p);
+    vec2 w = rot(dir*A*(6.5*exp(-r2*2.4) + 0.9*exp(-sqrt(r2)*1.2)))*p;
+    for (int k=0; k<2; k++){
+      float ph = t*0.35 + float(k)*3.14159 + uSeed;
+      vec2 c = vec2(0.55*cos(ph), 0.34*sin(ph*1.3));
+      vec2 d = w - c;
+      w = c + rot(-dir*A*4.0*exp(-dot(d,d)*10.0))*d;
+    }
+    return w * (1.0 - 0.2*A*exp(-r2*3.0));
+  }
+
+  vec2 wWater(vec2 p, float A){
+    float t = uFlow*0.55 + uSeed;
+    vec2 g = vec2(0.0);
+    for (int i=0; i<7; i++){ float fi = float(i);
+      float an = fi*2.39996 + uSeed;
+      vec2 d = vec2(cos(an), sin(an));
+      float k = 5.0 + fi*2.7;
+      g += cos(dot(p,d)*k + t*(1.1 + 0.23*fi) + fi) * d / (1.0 + 0.45*fi);
+    }
+    g += 0.8*vec2(sin(p.y*2.2 + t*0.4), cos(p.x*1.9 - t*0.35));
+    vec3 n = normalize(vec3(-g*A*0.55, 1.0));
+    vec3 L = normalize(vec3(-0.45, 0.6, 1.0));
+    vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+    gSpec = pow(max(dot(n,H), 0.0), 90.0) * A * 1.4;
+    gShade = 1.0 + (dot(n,L) - L.z) * 1.1;
+    return p + g*A*0.05;
+  }
+
+  void voronoi(vec2 g, float seed, out vec2 id, out vec2 ctr, out float edge){
+    vec2 ip = floor(g), fp = fract(g); float d1 = 9.0, d2 = 9.0; vec2 bo = vec2(0.0), bp = vec2(0.0);
+    for (int j=-1; j<=1; j++) for (int i=-1; i<=1; i++){
+      vec2 o = vec2(float(i), float(j));
+      vec2 pt = o + 0.12 + 0.76*hash22(ip + o + seed);
+      float d = length(pt - fp);
+      if (d < d1){ d2 = d1; d1 = d; bo = o; bp = pt; } else if (d < d2) d2 = d;
+    }
+    id = ip + bo; ctr = ip + bp; edge = d2 - d1;
+  }
+
+  vec2 wShatter(vec2 p, float A){
+    float sc = 3.0 + 1.6*fract(uSeed*0.37);
+    vec2 id, ctr; float e;
+    voronoi(p*sc, floor(uSeed*10.0), id, ctr, e);
+    vec2 h = hash22(id + uSeed*3.7) - 0.5;
+    vec2 c = ctr/sc;
+    gEdge = (1.0 - smoothstep(0.0, 0.05, e)) * smoothstep(0.0, 0.18, A);
+    gRim = (1.0 - smoothstep(0.05, 0.09, e)) * smoothstep(0.03, 0.06, e) * smoothstep(0.0, 0.25, A);
+    gDispV = h*1.2;
+    return c + rot(h.x*1.8*A)*(p - c)*(1.0 + h.y*0.7*A) + h*0.5*A;
+  }
+
+  vec2 wPrism(vec2 p, float A){
+    float sp = uFlow*0.04;
+    vec2 id, ctr; float e;
+    voronoi(rot(sp)*p*2.3, 7.0 + floor(uSeed*10.0), id, ctr, e);
+    vec2 n = hash22(id*1.37 + 2.0) - 0.5;
+    vec2 c = rot(-sp)*(ctr/2.3);
+    gShade = 1.0 + dot(n, vec2(0.7))*0.8*A;
+    gRim = (1.0 - smoothstep(0.0, 0.035, e)) * smoothstep(0.0, 0.2, A);
+    gDispV = n*3.0;
+    return p + n*A*0.34 + (p - c)*A*0.35*(n.y + 0.2);
+  }
+
+  vec2 kfold(vec2 p, float N, float spin){
+    float r = length(p); float a = atan(p.y, p.x) + spin;
+    float seg = TAU/N; a = mod(a, seg); a = abs(a - 0.5*seg);
+    a += uSeed*0.53 + 0.35*sin(uFlow*TAU/16.0);
+    return r*vec2(cos(a), sin(a));
+  }
+  vec2 wKaleido(vec2 p, float A){
+    vec2 k = kfold(p, uSegs, uFlow*0.09);
+    k *= 0.84 + 0.1*sin(uFlow*TAU/8.0);
+    return rot(A*0.7*length(p))*k;
+  }
+  vec2 wMandala(vec2 p, float A){
+    vec2 k = kfold(p, uSegs, -uFlow*0.07);
+    float r = max(length(k), 1e-4); float a = atan(k.y, k.x);
+    float m = (log(r) + uFlow*0.16)/1.2;
+    float tri = 1.0 - abs(1.0 - mod(m, 2.0));
+    a += 0.3*sin(m*3.14159);
+    return 0.1*exp(tri*1.2)*vec2(cos(a), sin(a));
+  }
+  vec2 wFractal(vec2 p, float A){
+    vec2 w = p;
+    for (int i=0; i<5; i++){ float fi = float(i);
+      float wi = smoothstep(0.0, 1.0, clamp(A*6.5 - fi*1.1, 0.0, 1.0));
+      vec2 f = abs(w) - vec2(0.27, 0.15)*(1.0 + 0.2*sin(uFlow*0.785 + fi));
+      f = rot(0.5 + 0.3*sin(uFlow*0.393 + uSeed + fi*0.7)) * f * 1.16;
+      w = mix(w, f, wi);
+    }
+    return w;
+  }
+  // Droste: the cover inside the cover, one dive per cycle (uU 0..1), seamless because the map is periodic in log-radius.
+  vec2 wTunnel(vec2 p, float A){
+    float r = max(length(p), 1e-5); float a = atan(p.y, p.x);
+    float s = smoothstep(0.0, 0.6, A);
+    float P = mix(log(400.0), log(2.3), s);
+    float lrMax = log(1.2);
+    float lr = lrMax - mod(lrMax - log(r) + P*uU, P);
+    a += s*1.1*(lr - lrMax);
+    return exp(lr)*vec2(cos(a), sin(a));
+  }
+
   void main(){
     float asp = uRes.x/uRes.y;
-    vec2 p = (vUv-0.5)*vec2(asp,1.0);
-    float r = length(p);
-    float t = uTime;
-    vec2 v = vec2(0.0);
-    // 0 liquid: curl-noise flow
-    v += uW[0] * curl(p*1.6 + vec2(t*0.07, -t*0.05) + uSeed) * 0.22;
-    // 1 vortex: swirl around center
-    float dir = sin(uSeed*7.0) > 0.0 ? 1.0 : -1.0;
-    v += uW[1] * dir * vec2(-p.y, p.x) * (0.9 + 1.6*uBeat) * exp(-r*1.2);
-    // 2 tunnel: zoom inward with a twist
-    v += uW[2] * (p * (0.25 + 0.9*uBeat) + vec2(-p.y,p.x)*0.35*dir);
-    // 3 ripple: waves emitted on beats
-    v += uW[3] * (p/(r+1e-3)) * sin(r*26.0 - t*7.0) * (0.25 + 1.8*uBeat);
-    // 4 shatter: cells jump on each beat, bands glitch on onsets
-    vec2 cell = floor(p*vec2(5.0,5.0) + uSeed);
-    vec2 h = vec2(hash(cell + uBeatCount), hash(cell*1.7 + uBeatCount + 3.1)) - 0.5;
-    float band = floor(vUv.y*36.0);
-    float g = step(0.86, hash(vec2(band, uBeatCount)));
-    v += uW[4] * (h * 3.2 * uBeat + vec2((hash(vec2(band, uBeatCount+9.0))-0.5) * 9.0 * g * uOnset, 0.0));
-    // song transition swirl
-    v += uTrans * vec2(-p.y, p.x) * 2.2 * exp(-r*0.8);
+    vec2 p = (vUv-0.5)*vec2(asp, 1.0);
+    p *= 1.0 - 0.028*uPulse;              // centred punch on the beat
+    float A = uA;
+    gShade = 1.0; gSpec = 0.0; gEdge = 0.0; gRim = 0.0; gDispV = vec2(0.0);
+    vec2 w;
+    if (uMode == 0) w = wLiquid(p, A);
+    else if (uMode == 1) w = wVortex(p, A);
+    else if (uMode == 2) w = wWater(p, A);
+    else if (uMode == 3) w = wShatter(p, A);
+    else if (uMode == 4) w = wPrism(p, A);
+    else if (uMode == 5) w = wKaleido(p, A);
+    else if (uMode == 6) w = wMandala(p, A);
+    else if (uMode == 7) w = wFractal(p, A);
+    else w = wTunnel(p, A);
 
-    vec2 sp = p - v * uAmount * uDt;
-    vec2 suv = sp/vec2(asp,1.0) + 0.5;
-    vec3 prev = texture(uPrev, suv).rgb;
-    // unsharp mask: counteracts the blur of repeated bilinear resampling -> crisp, inky edges instead of mush
-    vec2 px = 1.0/uRes;
-    vec3 nb = texture(uPrev, suv+vec2(px.x,0.0)).rgb + texture(uPrev, suv-vec2(px.x,0.0)).rgb
-            + texture(uPrev, suv+vec2(0.0,px.y)).rgb + texture(uPrev, suv-vec2(0.0,px.y)).rgb;
-    prev = clamp(prev + (prev - nb*0.25) * uSharp, 0.0, 1.0);
-    prev = hueShift(prev, uHue*uDt);
-    // keep contrast from washing out under repeated resampling
-    prev = clamp(mix(prev, prev*prev*(3.0-2.0*prev), 0.004*uAmount), 0.0, 1.0);
-    vec3 tgt = target(vUv);
-    o = vec4(mix(prev, tgt, uRestore), 1.0);
+    vec2 dx = dFdx(w), dy = dFdy(w);
+    if (uMode <= 1) { // liquid folds catch the light
+      float px = 1.0/uRes.y;
+      float J = (dx.x*dy.y - dx.y*dy.x)/(px*px);
+      gShade *= 1.0 + A*(0.6*exp(-abs(J)*2.2) - 0.07);
+    }
+    vec3 c;
+    if (uMode == 5 || uMode == 6) {
+      // kaleidoscope blooms out of the centre and folds back into it – no cross-fade of the whole frame
+      vec2 w2 = wLiquid(p, A*0.22);
+      vec2 dx2 = dFdx(w2), dy2 = dFdy(w2);
+      float r = length(p);
+      float R = uBloom * (1.0 + 0.10*cos(uSegs*atan(p.y, p.x) + uFlow*0.8));
+      float m = smoothstep(R - 0.09, R + 0.01, r);
+      vec3 inner = vec3(0.0), outer = vec3(0.0);
+      if (m < 0.999) inner = colorAt(w, dx, dy, uFill);
+      if (m > 0.001) outer = colorAt(w2, dx2, dy2, uFill*0.08);
+      c = mix(inner, outer, m);
+      gRim = exp(-pow((r - R + 0.035)/0.025, 2.0)) * smoothstep(0.0, 0.12, uBloom) * 0.6;
+    } else {
+      c = colorAt(w, dx, dy, uFill);
+    }
+    c *= gShade;
+    c += gSpec*vec3(1.0, 0.98, 0.94);
+    c = mix(c, c*0.1, gEdge*0.85);
+    c += gRim*0.32*(0.6 + c);
+    c = hueShift(c, uHue);
+    float l = dot(c, vec3(0.299, 0.587, 0.114));
+    c = mix(vec3(l), c, 1.0 + 0.22*A);
+    c *= 1.0 + 0.07*uPulse;
+    c = max(c, 0.0);
+    o = vec4(mix(c, texture(uPrev, vUv).rgb, uTrail), 1.0);
   }`;
 
-  // Display pass: non-accumulating effects (kaleidoscope, punch, chroma split, glow, grain).
-  const DISPLAY = `#version 300 es
+  const PRESENT = `#version 300 es
   precision highp float;
   in vec2 vUv; out vec4 o;
-  uniform sampler2D uFb, uImgA, uImgB;
-  uniform vec2 uRes;
-  uniform float uTime, uKale, uBeat, uOnset, uMorph, uSegs, uGlow, uClean, uMix, uSquare, uSeed, uBeatCount, uWarp, uTrail;
-  uniform float uW[6];
-  ${COMMON}
-  ${TARGET}
+  uniform sampler2D uSrc; uniform vec2 uRes;
   void main(){
+    vec3 c = texture(uSrc, vUv).rgb;
     float asp = uRes.x/uRes.y;
-    vec2 p = (vUv-0.5)*vec2(asp,1.0);
-    if (uKale > 0.001) {
-      float r = length(p); float a = atan(p.y, p.x);
-      float seg = 6.2831853/uSegs;
-      float ka = mod(a + uTime*0.06, seg); ka = abs(ka - seg*0.5) + uTime*0.04 + uSeed;
-      // fold into a wedge that stays inside the cover and slowly sweeps across it
-      vec2 k = r*0.5*vec2(cos(ka), sin(ka));
-      p = mix(p, k, uKale);
-    }
-    p *= 1.0 - uBeat*0.022*uMorph;
-    vec2 uv = p/vec2(asp,1.0) + 0.5;
-    vec2 d = (uv-0.5);
-    float ca = (0.0008 + uOnset*0.010 + uBeat*0.004) * uMorph;
-    vec3 c;
-    c.r = texture(uFb, uv + d*ca*2.0).r;
-    c.g = texture(uFb, uv).g;
-    c.b = texture(uFb, uv - d*ca*2.0).b;
-    if (uGlow > 0.001) {
-      vec3 acc = vec3(0.0);
-      vec2 px = 1.0/uRes;
-      for (int i=0;i<8;i++){
-        float an = float(i)*0.785398;
-        vec3 s = texture(uFb, uv + vec2(cos(an),sin(an))*px*14.0).rgb;
-        acc += max(s - 0.68, 0.0);
-      }
-      c += acc/8.0 * uGlow * 0.9;
-    }
-    // direct layer: the crisp original cover, bent by a live (non-accumulating) field.
-    // Keeps real image detail on screen while the feedback layer adds the liquid trails.
-    if (uTrail < 0.999) {
-      float r = length(p);
-      vec2 f = vec2(0.0);
-      f += (0.35 + uW[0]) * curl(p*1.6 + vec2(uTime*0.13, -uTime*0.09) + uSeed) * 0.075;
-      f += (0.4 + 0.6*uW[0]) * curl(p*4.2 - vec2(uTime*0.21, uTime*0.17) + uSeed*1.7) * 0.022 * (0.4 + uBeat);
-      f -= p * uBeat * 0.06; // breath on the kick
-      float ang = uW[1] * (0.10 + 0.32*uBeat) * (exp(-r*2.6) - 0.25) * (sin(uSeed*7.0) > 0.0 ? 1.0 : -1.0);
-      f += vec2(cos(ang)*p.x - sin(ang)*p.y, sin(ang)*p.x + cos(ang)*p.y) - p;
-      f += uW[2] * (-p) * (0.05 + 0.18*uBeat);
-      f += uW[3] * (p/(r+1e-3)) * sin(r*28.0 - uTime*6.0) * (0.01 + 0.035*uBeat);
-      vec2 cell = floor(p*5.0 + uSeed);
-      f += uW[4] * (vec2(hash(cell + uBeatCount), hash(cell*1.7 + uBeatCount + 3.1)) - 0.5) * 0.12 * uBeat;
-      vec2 wuv = (p + f*uWarp)/vec2(asp,1.0) + 0.5;
-      vec2 cd = (wuv-0.5)*ca*2.0;
-      vec3 dc = vec3(target(wuv+cd).r, target(wuv).g, target(wuv-cd).b);
-      c = mix(dc, c, uTrail);
-    }
-    // calm moments: let the untouched, pixel-sharp cover shine through
-    if (uClean > 0.001) c = mix(c, target(vUv), uClean);
-    c *= 1.0 + uBeat*0.10*uMorph;
-    float vig = smoothstep(1.25, 0.35, length((vUv-0.5)*vec2(asp,1.0)));
-    c *= mix(0.62, 1.0, vig);
-    c += (hash(vUv*uRes + fract(uTime*7.0)*311.0) - 0.5) * 0.028;
-    o = vec4(c, 1.0);
+    c *= mix(0.62, 1.0, smoothstep(1.25, 0.35, length((vUv-0.5)*vec2(asp, 1.0))));
+    vec2 f = gl_FragCoord.xy;
+    float n = fract(sin(dot(f, vec2(12.9898, 78.233)))*43758.5453);
+    o = vec4(c + (n - 0.5)/160.0, 1.0); // static dither against banding
   }`;
 
   /* ------------------------------------------------------------------ */
@@ -380,17 +524,15 @@
       if (!gl) throw new Error("WebGL2 not available");
       this.gl = gl;
       this.half = !!gl.getExtension("EXT_color_buffer_float");
-      this.fbProg = this.program(VERT, FEEDBACK);
-      this.dpProg = this.program(VERT, DISPLAY);
+      this.scene = this.program(VERT, SCENE);
+      this.present = this.program(VERT, PRESENT);
       this.vao = gl.createVertexArray();
       gl.bindVertexArray(this.vao);
       const buf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      for (const prog of [this.fbProg, this.dpProg]) {
-        const loc = gl.getAttribLocation(prog.p, "aPos");
-        if (loc >= 0) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0); }
-      }
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       this.imgA = this.placeholder();
       this.imgB = this.imgA;
       this.targets = null;
@@ -416,8 +558,7 @@
       const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
       for (let i = 0; i < n; i++) {
         const info = gl.getActiveUniform(p, i);
-        const name = info.name.replace(/\[0\]$/, "");
-        u[name] = gl.getUniformLocation(p, info.name);
+        u[info.name.replace(/\[0\]$/, "")] = gl.getUniformLocation(p, info.name);
       }
       return { p, u };
     }
@@ -444,12 +585,13 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+      const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
+      if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, 8);
       return t;
     }
 
     pushImage(tex) {
-      const gl = this.gl;
-      if (this.imgA !== this.imgB && this.imgA) gl.deleteTexture(this.imgA);
+      if (this.imgA !== this.imgB && this.imgA) this.gl.deleteTexture(this.imgA);
       this.imgA = this.imgB;
       this.imgB = tex;
     }
@@ -462,8 +604,8 @@
       else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const fb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
@@ -492,37 +634,26 @@
       gl.bindVertexArray(this.vao);
       gl.viewport(0, 0, this.w, this.h);
 
-      // feedback
-      const P = this.fbProg;
+      const P = this.scene;
       gl.useProgram(P.p);
       gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex); gl.uniform1i(P.u.uPrev, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.imgA); gl.uniform1i(P.u.uImgA, 1);
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.imgB); gl.uniform1i(P.u.uImgB, 2);
       gl.uniform2f(P.u.uRes, this.w, this.h);
-      const set = (name, v) => { if (P.u[name]) gl.uniform1f(P.u[name], v); };
-      set("uTime", f.time); set("uDt", f.dt); set("uMix", f.mix); set("uEnergy", f.energy);
-      set("uBeat", f.beat); set("uBar", f.bar); set("uOnset", f.onset);
-      set("uRestore", this.needsInit ? 1 : f.restore);
-      set("uAmount", f.amount); set("uHue", f.hue); set("uBeatCount", f.beatCount);
-      set("uTrans", f.trans); set("uSquare", f.square); set("uSeed", f.seed); set("uSharp", f.sharp);
-      if (P.u.uW) gl.uniform1fv(P.u.uW, f.w);
+      if (P.u.uMode) gl.uniform1i(P.u.uMode, f.mode);
+      for (const k of ["Mix", "Square", "A", "Fill", "Flow", "Pulse", "U", "Seed", "Segs", "Hue", "Trail", "Glow", "Disp", "Bloom"]) {
+        const loc = P.u["u" + k];
+        if (loc) gl.uniform1f(loc, k === "Trail" && this.needsInit ? 0 : f[k.toLowerCase()]);
+      }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       this.needsInit = false;
 
-      // display
-      const D = this.dpProg;
+      const D = this.present;
       gl.useProgram(D.p);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, dst.tex); gl.uniform1i(D.u.uFb, 0);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.imgA); gl.uniform1i(D.u.uImgA, 1);
-      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.imgB); gl.uniform1i(D.u.uImgB, 2);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, dst.tex); gl.uniform1i(D.u.uSrc, 0);
       gl.uniform2f(D.u.uRes, this.w, this.h);
-      const setD = (name, v) => { if (D.u[name]) gl.uniform1f(D.u[name], v); };
-      setD("uTime", f.time); setD("uKale", f.kale); setD("uBeat", f.beat); setD("uOnset", f.onset);
-      setD("uMorph", f.morph); setD("uSegs", f.segs); setD("uGlow", f.glow);
-      setD("uClean", f.clean); setD("uMix", f.mix); setD("uSquare", f.square); setD("uSeed", f.seed); setD("uBeatCount", f.beatCount); setD("uWarp", f.warp); setD("uTrail", f.trail);
-      if (D.u.uW) gl.uniform1fv(D.u.uW, f.w);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       this.targets = [dst, src];
@@ -571,10 +702,14 @@
     return url;
   }
 
+  // spotify:localfileimage: (local files) refuses CORS mode but is still usable by WebGL without it.
   function loadImage(url) {
+    return loadImageMode(url, true).catch(() => loadImageMode(url, false));
+  }
+  function loadImageMode(url, cors) {
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = "anonymous";
+      if (cors) img.crossOrigin = "anonymous";
       img.decoding = "async";
       img.onload = () => resolve(img);
       img.onerror = () => reject(new Error("image load failed"));
@@ -599,7 +734,7 @@
   #coverflux.cf-idle{cursor:none}
   #coverflux .cf-chrome{transition:opacity .5s ease, transform .5s cubic-bezier(.2,.7,.2,1)}
   #coverflux.cf-idle .cf-chrome{opacity:0;transform:translateY(6px);pointer-events:none}
-  #coverflux .cf-info{position:absolute;left:32px;bottom:26px;max-width:min(46vw,560px);pointer-events:none;
+  #coverflux .cf-info{position:absolute;left:32px;bottom:26px;max-width:min(40vw,520px);pointer-events:none;
     text-shadow:0 1px 18px rgba(0,0,0,.55)}
   #coverflux .cf-title{font-size:clamp(20px,2.3vw,34px);font-weight:700;letter-spacing:-.02em;line-height:1.05;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -609,7 +744,7 @@
   #coverflux .cf-info.cf-swap .cf-artist{animation-delay:.08s}
   #coverflux.cf-noinfo .cf-info{display:none}
   @keyframes cf-in{from{opacity:0;transform:translateY(10px);filter:blur(6px)}to{opacity:1;transform:none;filter:none}}
-  #coverflux .cf-controls{position:absolute;right:24px;bottom:22px;display:flex;align-items:center;gap:6px;padding:6px;
+  #coverflux .cf-controls{position:absolute;right:24px;bottom:22px;display:flex;align-items:center;gap:4px;padding:6px;
     border-radius:999px;background:rgba(14,14,15,.52);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
     box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 10px 30px rgba(0,0,0,.35);-webkit-app-region:no-drag}
   #coverflux .cf-seg{display:flex;position:relative;border-radius:999px;background:rgba(255,255,255,.06);padding:2px}
@@ -619,30 +754,35 @@
   #coverflux .cf-seg button[aria-checked="true"]{color:#111}
   #coverflux .cf-seg .cf-thumb{position:absolute;top:2px;bottom:2px;border-radius:999px;background:var(--cf-accent);
     transition:left .35s cubic-bezier(.3,.8,.2,1),width .35s cubic-bezier(.3,.8,.2,1)}
-  #coverflux .cf-field{display:flex;align-items:center;gap:8px;padding:0 10px;height:30px;font-size:11px;font-weight:600;letter-spacing:.06em;
+  #coverflux .cf-field{display:flex;align-items:center;gap:8px;padding:0 9px;height:30px;font-size:11px;font-weight:600;letter-spacing:.06em;
     text-transform:uppercase;color:rgba(243,239,232,.55)}
   #coverflux select{all:unset;cursor:pointer;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;color:#f3efe8;padding-right:14px;
     background:linear-gradient(45deg,transparent 50%,currentColor 50%) right 4px center/4px 4px no-repeat,
       linear-gradient(-45deg,transparent 50%,currentColor 50%) right 0 center/4px 4px no-repeat}
   #coverflux select option{background:#1c1c1e;color:#f3efe8}
-  #coverflux input[type=range]{-webkit-appearance:none;appearance:none;width:96px;height:3px;border-radius:3px;cursor:pointer;
+  #coverflux input[type=range]{-webkit-appearance:none;appearance:none;width:84px;height:3px;border-radius:3px;cursor:pointer;
     background:linear-gradient(90deg,var(--cf-accent) var(--v,70%),rgba(255,255,255,.18) var(--v,70%))}
   #coverflux input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#f3efe8;
     box-shadow:0 0 0 4px rgba(255,255,255,.08);transition:transform .15s ease}
   #coverflux input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.2)}
-  #coverflux .cf-status{display:flex;align-items:center;gap:6px;padding:0 8px;font-size:11px;color:rgba(243,239,232,.5);white-space:nowrap}
-  #coverflux .cf-dot{width:6px;height:6px;border-radius:50%;background:#7a7a7a}
-  #coverflux .cf-dot.cf-live{background:var(--cf-accent);box-shadow:0 0 10px var(--cf-accent);animation:cf-pulse 1.6s ease-in-out infinite}
-  @keyframes cf-pulse{50%{opacity:.45}}
+  #coverflux .cf-sync input{width:64px}
+  #coverflux .cf-val{min-width:44px;font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;color:#f3efe8;font-size:11px}
+  #coverflux .cf-bpm{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;
+    font-variant-numeric:tabular-nums;color:#f3efe8;transition:background .2s ease}
+  #coverflux .cf-bpm:hover{background:rgba(255,255,255,.08)}
+  #coverflux .cf-bpm small{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(243,239,232,.5)}
+  #coverflux .cf-dot{width:6px;height:6px;border-radius:50%;background:#7a7a7a;flex:none}
+  #coverflux .cf-dot.cf-live{background:var(--cf-accent);box-shadow:0 0 10px var(--cf-accent)}
   #coverflux .cf-close{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:rgba(243,239,232,.75);
     transition:background .2s ease,color .2s ease,transform .2s ease}
   #coverflux .cf-close:hover{background:rgba(255,255,255,.1);color:#fff;transform:rotate(90deg)}
   #coverflux button:focus-visible,#coverflux select:focus-visible,#coverflux input:focus-visible{outline:2px solid var(--cf-accent);outline-offset:2px}
-  #coverflux .cf-note{position:absolute;right:28px;bottom:74px;font-size:11px;color:rgba(243,239,232,.6);opacity:0;transition:opacity .4s ease;pointer-events:none}
+  #coverflux .cf-note{position:absolute;right:28px;bottom:74px;font-size:11px;color:rgba(243,239,232,.7);opacity:0;transition:opacity .4s ease;pointer-events:none}
   #coverflux .cf-note.cf-show{opacity:1}
   #coverflux .cf-error{position:absolute;inset:0;display:none;place-items:center;font-size:14px;color:rgba(243,239,232,.7)}
   #coverflux.cf-failed .cf-error{display:grid}
-  @media (max-width:860px){#coverflux .cf-field.cf-int, #coverflux .cf-status{display:none}}
+  @media (max-width:1100px){#coverflux .cf-sync{display:none}}
+  @media (max-width:900px){#coverflux .cf-field.cf-int{display:none}#coverflux .cf-info{max-width:30vw}}
   @media (prefers-reduced-motion:reduce){#coverflux,#coverflux .cf-chrome{transition:none}}
   `;
   document.head.appendChild(style);
@@ -666,11 +806,13 @@
       <label class="cf-field">Modus
         <select class="cf-mode" aria-label="Modus">
           <option value="auto">Auto</option>
-          ${Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("")}
+          ${PRESET_KEYS().map((k) => `<option value="${k}">${PRESETS[k].label}</option>`).join("")}
         </select>
       </label>
       <label class="cf-field cf-int">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"></label>
-      <span class="cf-status" title=""><span class="cf-dot"></span><span class="cf-status-text"></span></span>
+      <label class="cf-field cf-sync" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync
+        <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
+      <button class="cf-bpm" aria-label="Tempo-Gefühl umschalten"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
       <button class="cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
       </button>
@@ -681,7 +823,8 @@
   const canvas = $("canvas");
   const elTitle = $(".cf-title"), elArtist = $(".cf-artist"), elInfo = $(".cf-info");
   const elMode = $(".cf-mode"), elInt = $(".cf-intensity"), elNote = $(".cf-note");
-  const elDot = $(".cf-dot"), elStatus = $(".cf-status-text"), elStatusWrap = $(".cf-status");
+  const elSync = $(".cf-syncr"), elSyncV = $(".cf-syncv");
+  const elBpm = $(".cf-bpm"), elBpmV = $(".cf-bpmv"), elBpmM = $(".cf-bpmm"), elDot = $(".cf-dot");
   const segButtons = Array.from(root.querySelectorAll(".cf-seg button"));
   const thumb = $(".cf-thumb");
 
@@ -692,6 +835,9 @@
     elMode.value = settings.mode;
     elInt.value = Math.round(settings.intensity * 100);
     elInt.style.setProperty("--v", elInt.value + "%");
+    elSync.value = settings.syncMs;
+    elSync.style.setProperty("--v", ((settings.syncMs + 250) / 5) + "%");
+    elSyncV.textContent = (settings.syncMs > 0 ? "+" : "") + settings.syncMs + " ms";
     root.classList.toggle("cf-noinfo", !settings.showInfo);
   }
 
@@ -707,8 +853,21 @@
     if (settings.source === b.dataset.src) return;
     settings.source = b.dataset.src; saveSettings(); syncControls(); refreshCover(true);
   }));
-  elMode.addEventListener("change", () => { settings.mode = elMode.value; saveSettings(); state.forcePreset = true; });
+  elMode.addEventListener("change", () => { settings.mode = elMode.value; saveSettings(); state.pending = true; });
   elInt.addEventListener("input", () => { settings.intensity = elInt.value / 100; elInt.style.setProperty("--v", elInt.value + "%"); saveSettings(); });
+  const setSync = (ms) => { settings.syncMs = clamp(Math.round(ms / 10) * 10, -250, 250); saveSettings(); syncControls(); };
+  elSync.addEventListener("input", () => setSync(+elSync.value));
+  elBpm.addEventListener("click", () => {
+    const uri = audio.uri;
+    if (!uri) return;
+    // cycle: Auto -> halbe -> normal -> doppelte -> Auto
+    const order = [undefined, 2, 1, 0.5];
+    const cur = tempoOverrides[uri];
+    const next = order[(order.indexOf(cur) + 1) % order.length];
+    if (next === undefined) delete tempoOverrides[uri]; else tempoOverrides[uri] = next;
+    saveTempo(); refreshStatus(); state.pending = true;
+    note(next === undefined ? "Tempo: automatisch erkannt" : "Tempo für diesen Song fixiert");
+  });
   $(".cf-close").addEventListener("click", () => close());
 
   // idle chrome
@@ -748,36 +907,39 @@
   let renderer = null;
   const audio = new AudioModel();
   const state = {
-    energyFast: 0, energySlow: 0, beat: 0, onset: 0, bar: 0, returnPulse: 1, trans: 0,
-    mix: 1, mixFrom: 0, lastSection: -1, lastBar: -1, beatCount: 0, lastBeat: -1,
-    w: [1, 0, 0, 0, 0, 0], targetW: [1, 0, 0, 0, 0, 0], presetKey: "liquid", seed: 0, hueDir: 1,
-    pos: 0, posAt: 0, playing: false, lastSync: 0, time: 0, forcePreset: true, restoreRate: 0, amount: 0, morph: 0, clean: 0,
+    energyFast: 0, energySlow: 0, A: 0, env: 0, pulse: 0, trans: 0, mix: 1,
+    presetKey: "liquid", seed: 0, segs: 8, hueDir: 1, pending: true,
+    lastSection: -1, lastCycle: null, cycleU: 0, felt: 0, flow: 0,
+    pos: 0, posAt: 0, playing: false, lastSync: 0, time: 0,
   };
   let isOpen = false, raf = 0, lastNow = 0, layoutTick = 0;
 
-  function choosePreset(sectionIdx) {
+  function choosePreset(section, cycle) {
     let key = settings.mode;
+    const salt = (audio.uri || "x") + ":" + section + ":" + Math.floor(cycle / 4);
     if (key === "auto" || !PRESETS[key]) {
-      const base = hashStr(audio.uri || "x");
-      key = AUTO_ORDER[(base + sectionIdx * 3) % AUTO_ORDER.length];
+      const pool = state.energySlow > 0.5 ? LOUD_POOL : CALM_POOL;
+      let i = hashStr(salt) % pool.length;
+      if (pool[i] === state.presetKey) i = (i + 1) % pool.length;
+      key = pool[i];
     }
+    const h = hashStr(salt + key);
     state.presetKey = key;
-    state.targetW = PRESETS[key].w.slice();
-    state.seed = (hashStr((audio.uri || "") + ":" + sectionIdx) % 1000) / 37;
-    state.hueDir = (sectionIdx % 2 ? -1 : 1);
+    state.seed = (h % 1000) / 37;
+    state.segs = [6, 8, 10, 12][h % 4];
+    state.hueDir = h & 16 ? 1 : -1;
   }
 
   function syncPosition(now) {
-    let p = 0;
+    let p = 0, playing = false;
     try { p = (S.Player.getProgress() || 0) / 1000; } catch (_) {}
-    let playing = false;
     try { playing = !!S.Player.isPlaying(); } catch (_) {}
     const predicted = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0);
-    if (!state.lastSync || Math.abs(predicted - p) > 0.25 || playing !== state.playing) {
-      state.pos = p; state.posAt = now;
-    } else {
-      state.pos = predicted; state.posAt = now;
-    }
+    const err = p - predicted;
+    // small errors are eased out (no visible jumps), big ones (seek, pause) snap
+    if (!state.lastSync || Math.abs(err) > 0.3 || playing !== state.playing) state.pos = p;
+    else state.pos = predicted + err * 0.35;
+    state.posAt = now;
     state.playing = playing;
     state.lastSync = now;
   }
@@ -789,62 +951,67 @@
     lastNow = now;
     state.time += dt;
 
-    if (now - state.lastSync > 400) syncPosition(now);
-    const pos = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0);
+    if (now - state.lastSync > 250) syncPosition(now);
+    const pos = state.pos + (state.playing ? (now - state.posAt) / 1000 : 0) + settings.syncMs / 1000;
     const a = audio.sample(pos);
     const live = state.playing;
-    const I = settings.intensity;
+    const I = settings.intensity * (reducedMotion.matches ? 0.4 : 1);
 
     const loud = live ? a.loud : 0;
     state.energyFast = follow(state.energyFast, loud, 14, 3.5, dt);
     state.energySlow = follow(state.energySlow, live ? loud * 0.55 + a.sectionLoud * 0.45 : 0, 0.9, 0.55, dt);
-    state.beat = live ? a.beat : state.beat * Math.exp(-dt * 6);
-    state.onset = live ? a.onset : 0;
-    state.bar = live ? a.bar : 0;
 
-    if (live && a.beatIndex !== state.lastBeat) { state.lastBeat = a.beatIndex; state.beatCount = (state.beatCount + 1) % 997; }
-    if (a.section !== state.lastSection) {
-      // new song section: big return to the original cover, then a fresh morph character
-      if (state.lastSection !== -1) state.returnPulse = 1;
-      state.lastSection = a.section;
-      choosePreset(a.section);
-    } else if (state.forcePreset) choosePreset(a.section);
-    state.forcePreset = false;
-    if (live && a.barIndex !== state.lastBar) {
-      state.lastBar = a.barIndex;
-      // every 8 bars: a short breath back toward the original – stronger in calmer parts
-      if (a.barIndex % 8 === 0 && a.barIndex > 0) state.returnPulse = Math.max(state.returnPulse, 0.5 + 0.4 * (1 - state.energySlow));
+    // ---- beat clock: felt beats, two-bar breathing cycle anchored on each section's first downbeat ----
+    const m = audio.mult();
+    const B = audio.beatPos(pos);
+    const F = (B - audio.d0) / m;
+    const cycLen = 2 * audio.bpb;
+    const anchorBeat = audio.secAnchor[a.section] ?? audio.d0;
+    const Fa = Math.round((anchorBeat - audio.d0) / m);
+    const rel = F - Fa;
+    const cycle = Math.floor(rel / cycLen);
+    const local = rel - cycle * cycLen;
+    const kE = lerp(1.5, 4.2, clamp(state.energySlow * 1.2)); // calm: smooth glide, loud: hard push on every beat
+    const k = Math.floor(local), fr = local - k;
+    const u = (k + 1 - Math.pow(1 - fr, kE)) / cycLen;
+    state.cycleU = u;
+    state.felt = F;
+    const Fi = Math.floor(F), Ff = F - Fi;
+    if (live) state.flow = Fi + 1 - Math.pow(1 - Ff, kE);
+
+    const sectionChanged = a.section !== state.lastSection;
+    if (sectionChanged || cycle !== state.lastCycle) {
+      if (sectionChanged || (settings.mode === "auto" && cycle % 4 === 0)) state.pending = true;
+      state.lastSection = a.section; state.lastCycle = cycle;
     }
-    state.returnPulse *= Math.exp(-dt / 1.7);
+
+    const env = Math.pow(Math.sin(Math.PI * u), 2);
+    const depth = I * (0.28 + 0.72 * clamp(state.energySlow * 1.15));
+    let targetA = live ? env * depth : 0;
+    if (state.pending) {
+      // swap the morph character only while the original cover is on screen
+      targetA = 0;
+      if (state.A < 0.02) { choosePreset(a.section, cycle); state.pending = false; }
+    }
+    targetA += state.trans * 0.55;
+    state.A += clamp(targetA - state.A, -dt * 5, dt * 5); // rate limit hides section jumps, keeps beat surges
     state.trans *= Math.exp(-dt / 1.1);
     state.mix = Math.min(1, state.mix + dt / 1.8);
 
-    for (let i = 0; i < 6; i++) state.w[i] += (state.targetW[i] - state.w[i]) * (1 - Math.exp(-dt * 1.3));
-
-    const calm = 1 - clamp(state.energySlow * 1.15);
-    const intensityRelax = 1.45 - I * 0.9;
-    const rate = (0.55 + 3.4 * Math.pow(calm, 2.3) + 7.5 * Math.pow(state.returnPulse, 1.4) + (live ? 0 : 2.2)) * intensityRelax;
-    state.restoreRate = rate;
-    const restore = 1 - Math.exp(-rate * dt);
-
-    const drive = 0.06 + 0.95 * Math.pow(state.energyFast, 1.25) + 0.65 * state.beat * (0.35 + state.energyFast) + 0.45 * state.onset;
-    const amount = I * 1.35 * drive * (1 - 0.85 * state.returnPulse) * (live ? 1 : 0.12) + state.trans * 0.35;
-    state.amount = amount;
-    const morph = clamp((state.energySlow * 1.35 - 0.15) * (1 - state.returnPulse) * (live ? 1 : 0)) * I;
-    state.morph = morph;
-    const cleanTarget = clamp((rate - 1.4) / 2.6) * (1 - clamp(amount * 1.6)) * (1 - clamp(state.trans * 2));
-    state.clean = follow(state.clean, cleanTarget, 2.2, 3.5, dt);
+    const accent = audio.accentAt(Fi * m + audio.d0);
+    const downbeat = ((Fi - Fa) % audio.bpb + audio.bpb) % audio.bpb === 0 ? 1.25 : 1;
+    state.pulse = live && !reducedMotion.matches ? Math.exp(-Ff * 5.5) * (0.35 + 0.65 * accent) * downbeat * (0.3 + 0.7 * state.energyFast) * settings.intensity : 0;
 
     if (++layoutTick % 60 === 0) layout();
 
+    const P = PRESETS[state.presetKey];
+    const A = state.A;
     const asp = renderer.w / renderer.h;
     renderer.render({
-      time: state.time, dt, mix: state.mix, energy: state.energyFast, beat: state.beat * I, bar: state.bar, onset: state.onset * I,
-      restore, amount, hue: 0.22 * state.hueDir * state.energySlow * I * (a.bright * 0.6 + 0.4),
-      beatCount: state.beatCount, trans: state.trans, square: Math.min(0.8, 0.86 * asp), seed: state.seed, w: state.w,
-      kale: state.w[5] * clamp(morph * 1.4), morph: Math.max(morph, 0.15 * I), segs: 6 + 2 * (state.lastSection % 3), glow: morph * 0.7, clean: state.clean,
-      sharp: 0.015 + 0.02 * clamp(amount), warp: I * (0.25 + 1.1 * state.energyFast + 0.8 * state.beat) * (1 - 0.9 * state.returnPulse) * (live ? 1 : 0.2),
-      trail: clamp(0.18 + 0.42 * state.energySlow + 0.3 * state.trans),
+      mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp), a: A, fill: A * P.fill,
+      flow: state.flow, pulse: state.pulse, u: state.cycleU, seed: state.seed, segs: state.segs,
+      hue: state.hueDir * A * 0.45, trail: reducedMotion.matches ? 0 : 0.1 + 0.36 * clamp(A * 1.3),
+      glow: A * 0.55, disp: A * (P.mode === 4 ? 0.02 : 0.004) + state.pulse * A * 0.004, bloom: A * 1.7,
     });
   }
 
@@ -863,7 +1030,7 @@
       if (!url && token === coverToken) note("Kein Playlist-Cover verfügbar – zeige Song-Cover");
     }
     if (!url) url = trackCover(data);
-    if (token !== coverToken || !url || (!force && url === currentCoverUrl && renderer)) return;
+    if (token !== coverToken || !url) return;
     if (url === currentCoverUrl && !force) return;
     try {
       const img = await loadImage(url);
@@ -872,14 +1039,13 @@
       renderer.pushImage(renderer.uploadImage(img));
       state.mix = 0;
       state.trans = Math.max(state.trans, 0.6);
-      state.returnPulse = Math.max(state.returnPulse, 0.8);
-      extractAccent(url);
+      extractAccent();
     } catch (e) {
       console.warn("[Coverflux] cover load failed", e);
     }
   }
 
-  async function extractAccent(url) {
+  async function extractAccent() {
     try {
       const uri = S.Player.data && S.Player.data.item && S.Player.data.item.uri;
       if (!S.colorExtractor || !uri) return;
@@ -903,11 +1069,15 @@
 
   function refreshStatus() {
     const live = !audio.synthetic;
+    const m = audio.mult();
+    const fixed = tempoOverrides[audio.uri] !== undefined;
     elDot.classList.toggle("cf-live", live);
-    elStatus.textContent = live ? "Spotify-Analyse" : "Simuliert";
-    elStatusWrap.title = live
-      ? "Reagiert auf Spotifys Audio-Analyse (Lautheit, Beats, Takte, Abschnitte) des aktuellen Songs."
-      : "Keine Audio-Analyse verfügbar – Bewegung folgt einem simulierten Takt, nicht der echten Musik.";
+    elBpmV.textContent = Math.round(audio.tempo / m) + " BPM";
+    elBpmM.textContent = !live ? "simuliert" : fixed ? (m === 2 ? "½ fix" : m === 0.5 ? "2× fix" : "1× fix") : m !== 1 ? (m === 2 ? "auto ½" : "auto 2×") : "auto";
+    elBpm.title = (live
+      ? "Spotify-Analyse: Beats, Takte und Abschnitte des Songs steuern die Visuals."
+      : "Keine Audio-Analyse verfügbar – die Bewegung folgt einem simulierten Takt, nicht der echten Musik.")
+      + "\nSpotify meldet " + Math.round(audio.tempo) + " BPM. Klicken: Auto → halbes → normales → doppeltes Tempo (wird pro Song gespeichert).";
   }
 
   async function onTrack() {
@@ -917,7 +1087,7 @@
     refreshInfo();
     if (uri !== currentTrackUri) {
       currentTrackUri = uri;
-      state.lastSection = -1; state.lastBar = -1; state.forcePreset = true;
+      state.lastSection = -1; state.lastCycle = null; state.pending = true;
       let dur = 0; try { dur = (S.Player.getDuration() || 0) / 1000; } catch (_) {}
       audio.load(uri, dur).then(refreshStatus);
       refreshStatus();
@@ -944,7 +1114,13 @@
   }
 
   function onKey(e) {
-    if (e.key === "Escape" && isOpen) { e.stopPropagation(); close(); }
+    if (!isOpen) return;
+    if (e.key === "Escape") { e.stopPropagation(); close(); }
+    else if ((e.key === "[" || e.key === "]") && !/INPUT|SELECT|TEXTAREA/.test((e.target && e.target.tagName) || "")) {
+      e.stopPropagation();
+      setSync(settings.syncMs + (e.key === "]" ? 10 : -10));
+      note("Sync " + (settings.syncMs > 0 ? "+" : "") + settings.syncMs + " ms");
+    }
   }
 
   function open() {
@@ -955,7 +1131,7 @@
     if (ensureRenderer()) {
       layout();
       renderer.needsInit = true;
-      state.returnPulse = 1;
+      state.A = 0; state.pending = true;
       lastNow = 0; state.lastSync = 0;
       currentCoverUrl = null;
       onTrack();
@@ -987,5 +1163,5 @@
 
   syncControls();
   onTrack();
-  window.Coverflux = { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio };
+  window.Coverflux = { open, close, toggle: () => (isOpen ? close() : open()), state, settings, audio, presets: PRESETS };
 })();
