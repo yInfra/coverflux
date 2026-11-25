@@ -30,7 +30,7 @@ Ein zusätzlicher Knopf rechts in der Playbar (neben dem Lyrics-/Karaoke-Knopf) 
   - Tunnel: Droste-Tauchgang, der genau eine Periode tiefer endet
 - **Auto:** Pro Zyklus läuft ein Modus. Gewechselt wird nur, wenn das Original zu sehen ist. Manueller Moduswechsel und Pause führen jeden Punkt sanft nach Hause.
 - **Fallback:** Ohne Spotify-Analyse, etwa bei manchen Remastern und bei lokalen Dateien, wird der Takt simuliert.
-- Sicherungen: v1 liegt unter `backup/coverflux.v1.js`, v2.0 bis v2.4 unter `backup/coverflux.v2.0.js` bis `backup/coverflux.v2.4.js`. Zum Testen lässt sich ein Zyklus mit `Coverflux.state.forceU = 0..1` einfrieren, `null` gibt ihn wieder frei.
+- Versionen sind Git-Tags (`v1`, `v2.0` bis `v2.5`). Eine alte Version holst du mit `git show v2.3:src/coverflux.js > coverflux.js`. Zum Testen lässt sich ein Zyklus mit `Coverflux.state.forceU = 0..1` einfrieren, `null` gibt ihn wieder frei.
 
 ## Status (22.11.2026)
 - Installiert und angewendet auf Spotify 1.3.10.2586 mit Spicetify v2.46.7. Die CLI liegt unter `%LOCALAPPDATA%\spicetify\spicetify.exe`, steht aber **nicht im PATH**.
@@ -47,6 +47,11 @@ Ein zusätzlicher Knopf rechts in der Playbar (neben dem Lyrics-/Karaoke-Knopf) 
 powershell -ExecutionPolicy Bypass -File .install.ps1
 ```
 Voraussetzung ist die Spicetify CLI. Falls sie fehlt, nennt das Skript den offiziellen Installationsbefehl.
+
+## Entwicklung (Git-Repo)
+- Branch `main`. Jede veröffentlichte Version bekommt einen Tag `vX.Y`, die Versionsnummer steht oben in `src/coverflux.js`.
+- Ablauf: Änderung in `src/` vornehmen, im Harness testen, nach Spotify kopieren, committen und taggen.
+- Der Ordner `backup/` ist nur noch eine lokale Altlast und wird von Git ignoriert.
 
 ## Dateien
 - `src/coverflux.js`: die Extension (eine Datei, ohne Build)
