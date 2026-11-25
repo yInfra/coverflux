@@ -266,6 +266,56 @@ function coverfluxBeatFactory() {
 
   const r4 = (v) => Math.round(v * 1e4) / 1e4, r2 = (v) => Math.round(v * 100) / 100;
 
+  // ---- align two analyses of the same recording (a downloaded file vs Spotify's stream) ----
+  // Uses what both analyses share: segment onsets (attack-weighted), chroma and loudness.
+  // Returns { ok, shift, score, margin } – add `shift` seconds to times of `a` to land on `b`.
+  function timeline(an, R, n, sigma) {
+    const on = new Float32Array(n), loud = new Float32Array(n).fill(-60), chroma = [];
+    for (let k = 0; k < 12; k++) chroma.push(new Float32Array(n));
+    const w = Math.max(1, Math.ceil(2.5 * sigma));
+    for (const g of an.segments || []) {
+      const c = g.start * R, i0 = Math.round(c), att = Math.max(0, g.loudness_max - g.loudness_start);
+      for (let d = -w; d <= w; d++) { const i = i0 + d; if (i >= 0 && i < n) on[i] += att * Math.exp(-0.5 * ((i - c) / sigma) ** 2); }
+      const a = Math.max(0, Math.floor(c)), b = Math.min(n, Math.ceil((g.start + g.duration) * R));
+      for (let i = a; i < b; i++) {
+        if (g.loudness_max > loud[i]) loud[i] = g.loudness_max;
+        if (g.pitches) for (let k = 0; k < 12; k++) chroma[k][i] = g.pitches[k];
+      }
+    }
+    const z = (x) => { let m = 0; for (const v of x) m += v; m /= x.length; let s = 0; for (const v of x) s += (v - m) * (v - m); s = Math.sqrt(s / x.length) || 1; for (let i = 0; i < x.length; i++) x[i] = (x[i] - m) / s; return x; };
+    return { on: z(on), loud: z(loud), chroma: chroma.map(z), hasChroma: (an.segments || []).some((g) => g.pitches) };
+  }
+  function xcorr(x, y, L) {
+    let s = 0, c = 0;
+    const i0 = Math.max(0, -L), i1 = Math.min(x.length, y.length - L);
+    for (let i = i0; i < i1; i++) { s += x[i] * y[i + L]; c++; }
+    return c > 50 ? s / c : 0;
+  }
+  function align(a, b, maxShift = 20) {
+    const end = (an) => Math.max((an.track && an.track.duration) || 0, ...(an.segments || []).slice(-3).map((g) => g.start + g.duration));
+    const dur = Math.max(end(a), end(b)) + 1;
+    // coarse: 20 Hz over ±maxShift
+    const R = 20, n = Math.ceil(dur * R), A = timeline(a, R, n, 1), B = timeline(b, R, n, 1);
+    const chromaW = A.hasChroma && B.hasChroma ? 0.8 / 12 : 0, M = Math.round(maxShift * R);
+    const sc = new Float32Array(2 * M + 1);
+    let bi = 0;
+    for (let L = -M; L <= M; L++) {
+      let s = xcorr(A.on, B.on, L) + 0.3 * xcorr(A.loud, B.loud, L);
+      if (chromaW) for (let k = 0; k < 12; k++) s += chromaW * xcorr(A.chroma[k], B.chroma[k], L);
+      sc[L + M] = s;
+      if (s > sc[bi]) bi = L + M;
+    }
+    let second = -Infinity;
+    for (let i = 0; i < sc.length; i++) if (Math.abs(i - bi) > 0.6 * R && sc[i] > second) second = sc[i];
+    const coarse = (bi - M) / R, score = sc[bi], margin = score - second;
+    // fine: onset trains at 200 Hz within ±75 ms of the coarse lag
+    const R2 = 200, n2 = Math.ceil(dur * R2), A2 = timeline(a, R2, n2, 1.5), B2 = timeline(b, R2, n2, 1.5);
+    const c0 = Math.round(coarse * R2);
+    let fb = c0, fs = -Infinity;
+    for (let L = c0 - 15; L <= c0 + 15; L++) { const s = xcorr(A2.on, B2.on, L); if (s > fs) { fs = s; fb = L; } }
+    return { ok: score > 0.25 && margin > 0.06, shift: r4(fb / R2), score: r2(score), margin: r2(margin) };
+  }
+
   // x: mono Float32Array at 22050 Hz (resample before calling)
   function analyze(x) {
     const S = spectrogram(x), O = onsets(S);
@@ -315,6 +365,6 @@ function coverfluxBeatFactory() {
     return out;
   }
 
-  return { analyze, toMono22k, SR };
+  return { analyze, align, toMono22k, SR };
 }
 if (typeof module === "object" && module.exports) module.exports = coverfluxBeatFactory;

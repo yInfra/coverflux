@@ -230,7 +230,8 @@
         .filter((x) => x && !/^(spotidown|y2mate|savefrom|ytmp3|mp3juice)|\.(app|com|net|io|to|cc)$/i.test(x));
       if (parts.length >= 2) { pairs.push([norm(parts[0]), norm(parts[1])], [norm(parts[1]), norm(parts[0])]); }
       else if (parts.length === 1 && !tags.title) pairs.push([norm(parts[0]), ""]);
-      return pairs.filter((x) => x[0]);
+      const seen = new Set();
+      return pairs.filter((x) => x[0] && !seen.has(x.join("|")) && seen.add(x.join("|")));
     }
 
     function find(meta) {
@@ -302,43 +303,8 @@
     }
     async function clear() { await tx("tracks", "readwrite", (st) => st.clear()); await tx("analyses", "readwrite", (st) => st.clear()); index = []; }
 
-    // ---- aligning a file analysis with Spotify's analysis of the streamed version ----
-    function loudCurve(a, n) {
-      const c = new Float32Array(n);
-      c.fill(-60);
-      for (const g of a.segments) {
-        const i0 = Math.max(0, Math.floor(g.start * 10)), i1 = Math.min(n, Math.ceil((g.start + g.duration) * 10));
-        for (let i = i0; i < i1; i++) c[i] = Math.max(c[i], g.loudness_max);
-      }
-      let m = 0; for (const v of c) m += v / n;
-      let sd = 0; for (const v of c) sd += (v - m) * (v - m); sd = Math.sqrt(sd / n) || 1;
-      for (let i = 0; i < n; i++) c[i] = (c[i] - m) / sd;
-      return c;
-    }
-    // returns { ok, shift (s to add to the file's times), corr }
-    function align(own, spot) {
-      const dur = Math.max(own.track.duration || 0, (spot.track && spot.track.duration) || 0, 30), n = Math.ceil(dur * 10) + 1;
-      const A = loudCurve(own, n), B = loudCurve(spot, n);
-      let bestL = 0, best = -Infinity;
-      for (let L = -150; L <= 150; L++) {
-        let x = 0, c = 0;
-        for (let i = Math.max(0, -L); i < n && i + L < n; i++) { x += A[i] * B[i + L]; c++; }
-        x /= Math.max(1, c);
-        if (x > best) { best = x; bestL = L; }
-      }
-      // fine: count segment starts that coincide (±30 ms) around the coarse lag, 5 ms steps
-      const so = own.segments.map((g) => g.start), ss = spot.segments.map((g) => g.start);
-      // several shifts tie within the ±30 ms window – take the middle of that plateau
-      let fineHits = -1, tied = [];
-      for (let k = -24; k <= 24; k++) {
-        const d = bestL / 10 + k * 0.005;
-        let hits = 0, j = 0;
-        for (const t of so) { const u = t + d; while (j < ss.length && ss[j] < u - 0.03) j++; if (j < ss.length && Math.abs(ss[j] - u) <= 0.03) hits++; }
-        if (hits > fineHits) { fineHits = hits; tied = [d]; } else if (hits === fineHits) tied.push(d);
-      }
-      const fine = tied.reduce((x, y) => x + y, 0) / tied.length;
-      return { ok: best > 0.45, shift: Math.round(fine * 1000) / 1000, corr: Math.round(best * 100) / 100 };
-    }
+    // aligning a file analysis with Spotify's analysis of the streamed version: onsets + chroma + loudness (beat engine)
+    const align = (own, spot) => engine().align(own, spot);
     function shiftAnalysis(a, d) {
       const mv = (list) => (list || []).map((x) => Object.assign({}, x, { start: x.start + d }));
       return Object.assign({}, a, { beats: mv(a.beats).filter((b) => b.start >= 0), bars: mv(a.bars).filter((b) => b.start >= 0), sections: mv(a.sections), segments: mv(a.segments).filter((g) => g.start + g.duration > 0), tatums: mv(a.tatums) });
@@ -376,7 +342,7 @@
           else {
             const al = Library.align(own, data);
             if (al.ok) analysis = Object.assign({}, Library.shiftAnalysis(own, al.shift), { alignNote: "Datei, abgeglichen " + (al.shift >= 0 ? "+" : "") + al.shift.toFixed(2) + " s" });
-            else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (r=" + al.corr + ") – nehme Spotify");
+            else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (Score " + al.score + ", Abstand " + al.margin + ") – nehme Spotify");
           }
         }
       }

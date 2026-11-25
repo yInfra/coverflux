@@ -272,6 +272,56 @@ function coverfluxBeatFactory() {
 
   const r4 = (v) => Math.round(v * 1e4) / 1e4, r2 = (v) => Math.round(v * 100) / 100;
 
+  // ---- align two analyses of the same recording (a downloaded file vs Spotify's stream) ----
+  // Uses what both analyses share: segment onsets (attack-weighted), chroma and loudness.
+  // Returns { ok, shift, score, margin } – add `shift` seconds to times of `a` to land on `b`.
+  function timeline(an, R, n, sigma) {
+    const on = new Float32Array(n), loud = new Float32Array(n).fill(-60), chroma = [];
+    for (let k = 0; k < 12; k++) chroma.push(new Float32Array(n));
+    const w = Math.max(1, Math.ceil(2.5 * sigma));
+    for (const g of an.segments || []) {
+      const c = g.start * R, i0 = Math.round(c), att = Math.max(0, g.loudness_max - g.loudness_start);
+      for (let d = -w; d <= w; d++) { const i = i0 + d; if (i >= 0 && i < n) on[i] += att * Math.exp(-0.5 * ((i - c) / sigma) ** 2); }
+      const a = Math.max(0, Math.floor(c)), b = Math.min(n, Math.ceil((g.start + g.duration) * R));
+      for (let i = a; i < b; i++) {
+        if (g.loudness_max > loud[i]) loud[i] = g.loudness_max;
+        if (g.pitches) for (let k = 0; k < 12; k++) chroma[k][i] = g.pitches[k];
+      }
+    }
+    const z = (x) => { let m = 0; for (const v of x) m += v; m /= x.length; let s = 0; for (const v of x) s += (v - m) * (v - m); s = Math.sqrt(s / x.length) || 1; for (let i = 0; i < x.length; i++) x[i] = (x[i] - m) / s; return x; };
+    return { on: z(on), loud: z(loud), chroma: chroma.map(z), hasChroma: (an.segments || []).some((g) => g.pitches) };
+  }
+  function xcorr(x, y, L) {
+    let s = 0, c = 0;
+    const i0 = Math.max(0, -L), i1 = Math.min(x.length, y.length - L);
+    for (let i = i0; i < i1; i++) { s += x[i] * y[i + L]; c++; }
+    return c > 50 ? s / c : 0;
+  }
+  function align(a, b, maxShift = 20) {
+    const end = (an) => Math.max((an.track && an.track.duration) || 0, ...(an.segments || []).slice(-3).map((g) => g.start + g.duration));
+    const dur = Math.max(end(a), end(b)) + 1;
+    // coarse: 20 Hz over ±maxShift
+    const R = 20, n = Math.ceil(dur * R), A = timeline(a, R, n, 1), B = timeline(b, R, n, 1);
+    const chromaW = A.hasChroma && B.hasChroma ? 0.8 / 12 : 0, M = Math.round(maxShift * R);
+    const sc = new Float32Array(2 * M + 1);
+    let bi = 0;
+    for (let L = -M; L <= M; L++) {
+      let s = xcorr(A.on, B.on, L) + 0.3 * xcorr(A.loud, B.loud, L);
+      if (chromaW) for (let k = 0; k < 12; k++) s += chromaW * xcorr(A.chroma[k], B.chroma[k], L);
+      sc[L + M] = s;
+      if (s > sc[bi]) bi = L + M;
+    }
+    let second = -Infinity;
+    for (let i = 0; i < sc.length; i++) if (Math.abs(i - bi) > 0.6 * R && sc[i] > second) second = sc[i];
+    const coarse = (bi - M) / R, score = sc[bi], margin = score - second;
+    // fine: onset trains at 200 Hz within ±75 ms of the coarse lag
+    const R2 = 200, n2 = Math.ceil(dur * R2), A2 = timeline(a, R2, n2, 1.5), B2 = timeline(b, R2, n2, 1.5);
+    const c0 = Math.round(coarse * R2);
+    let fb = c0, fs = -Infinity;
+    for (let L = c0 - 15; L <= c0 + 15; L++) { const s = xcorr(A2.on, B2.on, L); if (s > fs) { fs = s; fb = L; } }
+    return { ok: score > 0.25 && margin > 0.06, shift: r4(fb / R2), score: r2(score), margin: r2(margin) };
+  }
+
   // x: mono Float32Array at 22050 Hz (resample before calling)
   function analyze(x) {
     const S = spectrogram(x), O = onsets(S);
@@ -321,7 +371,7 @@ function coverfluxBeatFactory() {
     return out;
   }
 
-  return { analyze, toMono22k, SR };
+  return { analyze, align, toMono22k, SR };
 }
 
 (function Coverflux() {
@@ -551,7 +601,8 @@ function coverfluxBeatFactory() {
         .filter((x) => x && !/^(spotidown|y2mate|savefrom|ytmp3|mp3juice)|\.(app|com|net|io|to|cc)$/i.test(x));
       if (parts.length >= 2) { pairs.push([norm(parts[0]), norm(parts[1])], [norm(parts[1]), norm(parts[0])]); }
       else if (parts.length === 1 && !tags.title) pairs.push([norm(parts[0]), ""]);
-      return pairs.filter((x) => x[0]);
+      const seen = new Set();
+      return pairs.filter((x) => x[0] && !seen.has(x.join("|")) && seen.add(x.join("|")));
     }
 
     function find(meta) {
@@ -623,43 +674,8 @@ function coverfluxBeatFactory() {
     }
     async function clear() { await tx("tracks", "readwrite", (st) => st.clear()); await tx("analyses", "readwrite", (st) => st.clear()); index = []; }
 
-    // ---- aligning a file analysis with Spotify's analysis of the streamed version ----
-    function loudCurve(a, n) {
-      const c = new Float32Array(n);
-      c.fill(-60);
-      for (const g of a.segments) {
-        const i0 = Math.max(0, Math.floor(g.start * 10)), i1 = Math.min(n, Math.ceil((g.start + g.duration) * 10));
-        for (let i = i0; i < i1; i++) c[i] = Math.max(c[i], g.loudness_max);
-      }
-      let m = 0; for (const v of c) m += v / n;
-      let sd = 0; for (const v of c) sd += (v - m) * (v - m); sd = Math.sqrt(sd / n) || 1;
-      for (let i = 0; i < n; i++) c[i] = (c[i] - m) / sd;
-      return c;
-    }
-    // returns { ok, shift (s to add to the file's times), corr }
-    function align(own, spot) {
-      const dur = Math.max(own.track.duration || 0, (spot.track && spot.track.duration) || 0, 30), n = Math.ceil(dur * 10) + 1;
-      const A = loudCurve(own, n), B = loudCurve(spot, n);
-      let bestL = 0, best = -Infinity;
-      for (let L = -150; L <= 150; L++) {
-        let x = 0, c = 0;
-        for (let i = Math.max(0, -L); i < n && i + L < n; i++) { x += A[i] * B[i + L]; c++; }
-        x /= Math.max(1, c);
-        if (x > best) { best = x; bestL = L; }
-      }
-      // fine: count segment starts that coincide (±30 ms) around the coarse lag, 5 ms steps
-      const so = own.segments.map((g) => g.start), ss = spot.segments.map((g) => g.start);
-      // several shifts tie within the ±30 ms window – take the middle of that plateau
-      let fineHits = -1, tied = [];
-      for (let k = -24; k <= 24; k++) {
-        const d = bestL / 10 + k * 0.005;
-        let hits = 0, j = 0;
-        for (const t of so) { const u = t + d; while (j < ss.length && ss[j] < u - 0.03) j++; if (j < ss.length && Math.abs(ss[j] - u) <= 0.03) hits++; }
-        if (hits > fineHits) { fineHits = hits; tied = [d]; } else if (hits === fineHits) tied.push(d);
-      }
-      const fine = tied.reduce((x, y) => x + y, 0) / tied.length;
-      return { ok: best > 0.45, shift: Math.round(fine * 1000) / 1000, corr: Math.round(best * 100) / 100 };
-    }
+    // aligning a file analysis with Spotify's analysis of the streamed version: onsets + chroma + loudness (beat engine)
+    const align = (own, spot) => engine().align(own, spot);
     function shiftAnalysis(a, d) {
       const mv = (list) => (list || []).map((x) => Object.assign({}, x, { start: x.start + d }));
       return Object.assign({}, a, { beats: mv(a.beats).filter((b) => b.start >= 0), bars: mv(a.bars).filter((b) => b.start >= 0), sections: mv(a.sections), segments: mv(a.segments).filter((g) => g.start + g.duration > 0), tatums: mv(a.tatums) });
@@ -697,7 +713,7 @@ function coverfluxBeatFactory() {
           else {
             const al = Library.align(own, data);
             if (al.ok) analysis = Object.assign({}, Library.shiftAnalysis(own, al.shift), { alignNote: "Datei, abgeglichen " + (al.shift >= 0 ? "+" : "") + al.shift.toFixed(2) + " s" });
-            else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (r=" + al.corr + ") – nehme Spotify");
+            else console.info("[Coverflux] Datei-Analyse passt nicht zur Spotify-Version (Score " + al.score + ", Abstand " + al.margin + ") – nehme Spotify");
           }
         }
       }
