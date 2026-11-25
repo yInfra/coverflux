@@ -1,0 +1,11 @@
+[
+  {
+    "name": "Coverflux",
+    "description": "Beat-locked visualizer that folds the cover art through kaleidoscopes, hyperbolic tilings and Droste spirals – and always lands back on the original. Own beat tracking, 20 modes.",
+    "preview": "docs/preview-kaleido.png",
+    "main": "dist/coverflux.js",
+    "readme": "README.md",
+    "authors": [{ "name": "yInfra", "url": "https://github.com/yInfra" }],
+    "tags": ["visualizer", "cover art", "beat", "kaleidoscope", "webgl"]
+  }
+]

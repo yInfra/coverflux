@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.1 — Plattformübergreifend und Open Source
+- **Kern und Anbindungen getrennt:** `createCoverflux(host)` in src/core.js, src/adapters/spicetify.js für Spotify Desktop, src/adapters/web.js für den Browser.
+- **Web-App:** Dateien abspielen mit exakter Analyse und Cover aus den Tags, Tab- oder Systemton und Mikrofon live, eigenes Bild als Cover, Drag & Drop, Desktop und Handy. Läuft über GitHub Pages.
+- **Live-Beat-Tracking** (createLive):
+  - PI-Regelschleife, zwei Schätzungen (geführt und frei), festgeschriebene Beats bewegen sich nie.
+  - Gegen Beat This! gemessen: 80 bis 84 %.
+- **Deutsch und Englisch** in der ganzen Oberfläche.
+- **Open Source:** MIT-Lizenz, englisches README, Spicetify-Marketplace-Manifest, Vorlagen für Issues, CONTRIBUTING, Pages-Workflow.
+
 ## v3.0 — Eigene Beat-Erkennung, 12 neue Modi, Modus-Liste
 - **Eigene Beat-Erkennung** (src/beat-engine.js, reines JS):
   - Spektrogramm, Spectral Flux, Tempo über die metrische Familie, DP-Beat-Tracking, Takt und Taktanfänge, Abschnitte, Segmente im Format von Spotifys Analyse.

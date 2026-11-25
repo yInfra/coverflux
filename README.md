@@ -1,121 +1,104 @@
 # Coverflux
 
-**Beat-synchroner Cover-Visualizer für Spotify Desktop ([Spicetify](https://spicetify.app)) auf Windows, macOS und Linux.**
+**Album art, folded to the beat.** Coverflux turns the cover of whatever is playing into a beat-locked visualizer. It folds the cover through kaleidoscopes, hyperbolic tilings, Droste spirals and circle inversions. Every effect is a closed loop that always lands back exactly on the original artwork, and the calmer the music, the more of the original stays visible.
 
-Ein Knopf in der Playbar neben dem Lyrics-Knopf verwandelt alles oberhalb der Playbar in einen Visualizer. Er morpht das Cover des laufenden Songs oder der Playlist im Takt durch mathematische Abbildungen: Kaleidoskope, hyperbolische Kachelungen, Droste-Spiralen, Kreisinversionen. Jeder Effekt ist eine geschlossene Bewegung und landet immer wieder exakt auf dem Original. Je ruhiger die Musik, desto mehr Original bleibt sichtbar.
+**[▶ Try it in your browser](https://yinfra.github.io/coverflux/)**: play an audio file, or let it follow a browser tab or your microphone. It runs on desktop and mobile and uploads nothing.
 
-| Vollbild | Quadrat |
+| Full screen | Square |
 | --- | --- |
-| ![Kaleido im Vollbild](docs/preview-kaleido.png) | ![Quadrat mit leuchtender Spiegelung](docs/preview-square.png) |
+| ![Kaleido, full screen](docs/preview-kaleido.png) | ![Square with a glowing blurred mirror](docs/preview-square.png) |
 
-<sub>Die Vorschaubilder stammen aus dem Test-Harness und zeigen generierte Test-Cover.</sub>
+<sub>Previews use generated test covers.</sub>
 
-## Installation
+[Deutsch](README.de.md)
 
-Voraussetzung ist die [Spicetify CLI](https://spicetify.app/docs/getting-started).
+## Two ways to use it
+
+### In the browser (any platform)
+Open **[yinfra.github.io/coverflux](https://yinfra.github.io/coverflux/)** and pick a source:
+
+| Source | How the beat is found |
+| --- | --- |
+| **Play a file** (MP3, FLAC, WAV, OGG …, drag & drop works) | Exact offline analysis of the whole song. Title, artist and cover come from the file's tags. |
+| **Tab or system audio**, e.g. Spotify in the browser | Live beat tracking on the shared audio. Tick *Share audio* when you share. |
+| **Microphone**, music in the room | Live beat tracking |
+
+You can drop in your own image as the cover at any time.
+
+### Spotify Desktop
+On Windows, macOS and Linux, Coverflux runs as a [Spicetify](https://spicetify.app) extension. A button next to the lyrics button turns everything above the playbar into the visualizer, and a soft reflection of it glows in the playbar.
+
+Install it from the Spicetify Marketplace, or by hand:
 
 ```bash
-git clone https://github.com/yInfra/coverflux.git
-cd coverflux
+git clone https://github.com/yInfra/coverflux.git && cd coverflux
+sh ./install.sh                                            # macOS / Linux
+powershell -ExecutionPolicy Bypass -File .\install.ps1      # Windows
 ```
 
-| System | Befehl |
-| --- | --- |
-| Windows | `powershell -ExecutionPolicy Bypass -File .\install.ps1` |
-| macOS / Linux | `sh ./install.sh` |
+To install manually, copy [`dist/coverflux.js`](dist/coverflux.js) into Spicetify's `Extensions` folder, then run `spicetify config extensions coverflux.js` and `spicetify apply`. Run `spicetify backup apply` again after every Spotify update.
 
-Danach Spotify neu starten. Ohne Git reicht auch die fertige Datei [`dist/coverflux.js`](dist/coverflux.js): in den Spicetify-Ordner `Extensions` legen, dann `spicetify config extensions coverflux.js` und `spicetify apply` ausführen.
+On Spotify Desktop, Coverflux uses Spotify's audio analysis. It checks and corrects that analysis, and it can analyse your own files (see below), which also gives local files a real beat.
 
-> **Nach jedem Spotify-Update** ist der Spicetify-Patch weg. Dann `spicetify backup apply` ausführen oder den Installer erneut starten.
+## Modes
 
-## Bedienung
+Songs are split into cycles of about 16 bars, aligned to the song's sections. At every cycle boundary you see the untouched original. *Auto* switches modes only there, so the switch itself is never visible, and it picks calm or energetic modes to match the music. In the mode list, a tick puts a mode into Auto's rotation, and clicking a row plays only that mode.
 
-| Element | Funktion |
-| --- | --- |
-| Playbar-Knopf | Visualizer öffnen oder schließen, `Esc` schließt ebenfalls |
-| **Modus-Chip** | Zeigt den laufenden Modus und öffnet die Modus-Liste. **Auto** wechselt zwischen allen Modi mit Häkchen. Ein Klick auf eine Zeile lässt nur diesen Modus laufen. **Alle** und **Keine** setzen die Häkchen. Darunter sitzt die Intensität. |
-| **BPM-Chip** | Der Punkt blinkt auf jedem gefühlten Beat. Er öffnet das Tempo-Panel mit der Erkennung, dem Verhältnis pro Song (Auto, ½, 1×, 2×, ⅓), **Tap**, der **eigenen Beat-Analyse** und **Sync**. |
-| Vollbild / Quadrat | Vollbild: das Cover gespiegelt über die ganze Fläche. Quadrat: das Cover bleibt ein Quadrat mit weichem, wabbelndem Rand in einer leuchtenden, verschwommenen Spiegelung. |
-| `T` | Tap: mindestens viermal im Takt drücken. Das setzt Tempo und Beat-Lage für diesen Song. |
-| `[` und `]` | Sync in 10-ms-Schritten, bis ±250 ms, etwa bei Bluetooth-Latenz |
+| Group | Mode | Mathematics |
+| --- | --- | --- |
+| Flow | Liquid · Ripple · Vortex · Prism · Tunnel | domain warping, refraction, radially delayed rotation, Droste zoom |
+| Symmetry | Kaleido · Mandala · Hexa · Rosette · Moiré · Quasicrystal | dihedral groups, wallpaper group p6m, z ↦ zⁿ, interfering lattices, n-fold plane waves |
+| Fractal | Fractal · Sierpinski · Inversion · Phyllotaxis | box folds, IFS, Apollonian circle inversion, golden-angle cells |
+| Space | Escher spiral · Hyperbolic · Triangle group · Sphere · Möbius flow | conformal Droste twist, {7,3} Poincaré disk, (P,4) Schwarz triangles, icosahedral group, loxodromic Möbius map |
 
-### Eigene Beat-Analyse
+Every point travels on its own closed path that only moves forward. The motion glides steadily and surges on each beat. With `prefers-reduced-motion`, rotations stop and the amplitude drops.
 
-Spotify liefert für lokale Dateien keine Audio-Analyse, und bei manchen Songs liegt sein Beat-Raster daneben. Darum hat Coverflux eine eigene Beat-Erkennung.
+## Beat detection
 
-1. Im Tempo-Panel **Ordner wählen** oder **Dateien** anklicken.
-2. Coverflux dekodiert und analysiert die Dateien direkt in Spotify. Nichts wird hochgeladen. Die Analyse braucht etwa 1 Sekunde pro Song und läuft in einem Hintergrund-Thread.
-3. Die Ergebnisse bleiben im Browser-Speicher von Spotify. Beim Abspielen findet Coverflux den Song über Titel (ID3-Tag oder Dateiname wie „Interpret - Titel“), Interpret und Dauer.
-   - **Lokale Dateien** nutzen die Analyse direkt.
-   - **Spotify-Songs** nutzen sie, wenn dieselbe Aufnahme als Datei vorliegt. Coverflux legt dazu den Lautstärkeverlauf der Datei auf Spotifys Version. Downloads mit anderem Anfang werden so automatisch verschoben. Passt die Datei nicht, bleibt Spotifys Analyse.
+Coverflux has its own beat tracker in plain JavaScript. It needs no dependencies, runs in a Web Worker, and works the same in the browser, in Spotify and in Node.
 
-**Unterstützte Formate:** MP3, FLAC, WAV, OGG und Opus. M4A und AAC nur, wenn Spotifys eingebauter Browser die Codecs mitbringt.
+- **Offline**, for files:
+  - log-band spectrogram, then spectral flux (SuperFlux-style)
+  - tempo from the whole metrical family of the autocorrelation
+  - dynamic-programming beat tracking (Ellis 2007) with sub-frame refinement
+  - downbeats from harmony changes and bass hits, duple or triple meter
+  - steady extrapolation through beatless intros and outros
+- **Live**, for tab, system and microphone audio:
+  - a rolling 16 s window, re-estimated every 0.5 s
+  - a PI phase-locked loop keeps the grid smooth, and committed beats never move
+  - two estimates run side by side, one tracking the current tempo and one free. The grid only switches when the free one clearly explains the music better, which gets it out of a wrong lock on an intro.
+- **Felt tempo:** The felt pulse stays at or below 140 BPM. Faster songs play on beats 1 and 3, and triple meter is never halved.
+- **Matching your files to Spotify:** Analyses of your files are matched to Spotify's streams by onsets, chroma and loudness, so downloads with a different intro still line up.
+- **Accuracy:** Measured against the neural reference [Beat This!](https://github.com/CPJKU/beat_this) on two pop/hip-hop songs, the offline tracker hits 97–100 % of the beats in the groove and the live tracker 80–84 %.
 
-**Wie die Erkennung arbeitet:**
-- Sie berechnet ein Log-Band-Spektrogramm und findet darin Einsätze (Spectral Flux mit SuperFlux-Maxfilter).
-- Das Tempo ergibt sich aus der ganzen metrischen Familie der Autokorrelation.
-- Die Beats legt sie mit dynamischer Programmierung (Ellis 2007), verfeinert auf weniger als ein Analyse-Fenster.
-- Taktanfänge erkennt sie an Akkordwechseln und Bass-Schlägen, Dreier- und Vierertakt unterscheidet sie.
-- In Intros und Outros ohne klaren Puls setzt sie das Raster gleichmäßig fort.
+In the Tempo panel, a dot blinks on every felt beat. If a song is off anyway, *Tap* (or `T`) sets the tempo and beat position for that song, and `[` / `]` shift everything by 10 ms.
 
-**Genauigkeit:** Gegen das neuronale Referenzmodell Beat This! (CPJKU) erreicht sie auf Hip-Hop- und Pop-Songs im Groove 97 bis 100 % Beat-Treffer bei ±70 ms. Taktanfänge trifft sie zu 76 bis 96 %. Gemessen wird mit `npm run beat-eval`.
+## Privacy
 
-### Tempo-Regeln
+Everything runs locally. Audio, files and analyses never leave the device. Analyses and settings are stored in the browser's (or Spotify's) local storage.
 
-- Der gefühlte Puls bleibt bei höchstens 140 BPM. Schnellere Songs laufen auf Schlag 1 und 3 jedes Takts.
-- Dreiertakt (3/4, 6/8) wird nie halbiert, sondern bekommt einen Puls pro Takt.
-- Für Spotifys eigene Analyse prüft Coverflux das Raster: Tempo aus der mittleren Schlaglänge, Erkennung von Dreiertakt und Korrektur eines Rasters auf dem Offbeat.
-
-## Modi
-
-Jeder Song-Abschnitt wird in Zyklen von rund 16 Takten aufgeteilt. An jeder Zyklusgrenze ist exakt das Original zu sehen. Auto wechselt nur dort, also unsichtbar, und wählt je nach Energie einen ruhigen oder lauten Modus unter denen mit Häkchen. Jeder Punkt läuft auf einer geschlossenen Bahn, die nur vorwärts geht. Er startet und landet von der Mitte nach außen versetzt.
-
-| Gruppe | Modus | Effekt | Mathematik |
-| --- | --- | --- | --- |
-| Fluss | Liquid | Marmorstrom, fließt eine Spiegel-Periode weiter | Sinus-Domain-Warping |
-| | Ripple | Wasser zieht quer durchs Bild | Wellenfeld mit Brechung |
-| | Vortex | Ringe drehen volle Runden | radial verzögerte Rotation |
-| | Prism | Geriffeltes Glas, Regenbogenkanten | Brechung an Rippen, Dispersion |
-| | Tunnel | Droste-Tauchgang, eine Periode tiefer | Log-Polar-Periodizität |
-| Symmetrie | Kaleido | Faltet sich von innen nach außen | Diedergruppe D_n |
-| | Mandala | Kaleido auf einer Spirale | D_n mit logarithmischem Radius |
-| | Hexa | Waben mit sechsfacher Spiegelung | Tapetengruppe p6m |
-| | Rosette | Blütenblätter | Winkelvervielfachung (z ↦ zⁿ) |
-| | Moiré | Zwei Kaleido-Gitter überlagern sich | Schwebung zweier Gitter |
-| | Quasikristall | Fünf- oder siebenzählig, wiederholt sich nie | Überlagerte ebene Wellen |
-| Fraktal | Fractal | Faltet sich Stufe für Stufe | iterierte Box-Faltung |
-| | Sierpinski | Dreiecke voller Dreiecke | IFS mit drei Kontraktionen |
-| | Inversion | Perlenketten | Apollonische Kreisinversion |
-| | Phyllotaxis | Sonnenblumen-Spirale aus Mini-Covern | goldener Winkel, Voronoi |
-| Raum | Escher-Spirale | Dreht sich endlos in sich selbst | Droste-Effekt mit Drehung |
-| | Hyperbolisch | Poincaré-Scheibe, Kacheln strömen | {7,3}-Kachelung, Möbius-Translation |
-| | Dreiecksgruppe | Dreiecks-Kaleidoskop, Winkel wandern | (P,4)-Schwarz-Dreiecke |
-| | Sphäre | Ikosaeder-Kugel, rollt einmal | Ikosaedergruppe auf S² |
-| | Möbius-Strom | Fließt von einem Pol in den anderen | loxodromische Möbius-Transformation |
-
-Bei `prefers-reduced-motion` gibt es keine Drehungen und deutlich weniger Ausschlag.
-
-## Entwicklung
+## Development
 
 ```text
-src/beat-engine.js     Beat-Erkennung (reines JS, Worker, Browser und Node)
-src/coverflux.js       die Extension: Renderer, Shader, Audio-Modell, Bibliothek, UI
-dist/coverflux.js      Bundle aus beiden, das Spicetify lädt (`npm run build`, wird mit committet)
-test/harness.html      nachgebautes Spicetify und Spotify-Layout mit generierten Covern
-test/*.test.mjs        Engine auf synthetischen Drum-Tracks, Raster-Prüfung, Bibliothek
-tools/                 Build, Kontaktbogen der Modi, UI-Screenshots, Vorschaubilder, Beat-Auswertung
-tools/analyze/         nur Entwicklung: Referenz-Beats mit Beat This! (Python)
+src/beat-engine.js      beat tracking: offline analysis, live tracking, alignment
+src/core.js             the visualizer: WebGL2 renderer, 20 shader modes, beat clock, UI – talks to a host interface
+src/adapters/           spicetify.js (Spotify Desktop), web.js (browser)
+dist/coverflux.js       Spicetify bundle   ┐ built by `npm run build`, committed,
+web/coverflux-web.js    web bundle         ┘ CI checks they are current
+test/                   harness (mocked Spicetify), engine tests on synthetic drums, grid tests
+tools/                  build, mode contact sheet, UI screenshots, beat evaluation
 ```
 
 ```bash
-npm install            # Playwright für Tests und Screenshots
-npm test               # Syntax-Checks und alle Tests (headless)
-npm run build          # dist/coverflux.js neu bauen, nach jeder Änderung in src/
-npm run serve          # Harness unter http://localhost:8765/test/harness.html
-npm run modes          # Kontaktbogen aller Modi über den Zyklus (braucht lokales Chrome mit GPU)
-npm run beat-eval -- song.mp3   # Engine gegen Referenz-Beats messen (siehe tools/analyze/)
+npm install          # Playwright for tests and screenshots
+npm test             # syntax checks + all tests (headless)
+npm run build        # rebuild the bundles after changing src/
+npm run serve        # http://localhost:8765/web/ and /test/harness.html
+npm run modes        # contact sheet of every mode across its cycle (needs local Chrome with GPU)
 ```
 
-- Debuggen in den Spotify-DevTools: `Coverflux.open()`, `Coverflux.state`, `Coverflux.audio.describe()` und `Coverflux.library`. Mit `Coverflux.state.forceU = 0..1` frierst du einen Zyklus ein.
-- Versionen sind Git-Tags, die Änderungen stehen im [CHANGELOG](CHANGELOG.md).
-- GitHub Actions führt die Tests aus und prüft, dass `dist/` aktuell ist.
+New platforms only need a host adapter. See the interface at the top of [`src/core.js`](src/core.js).
+
+## License
+
+[MIT](LICENSE) © yInfra. Coverflux is not affiliated with Spotify. Cover art shown belongs to its respective owners and is only ever displayed locally.
