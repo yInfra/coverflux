@@ -3,5 +3,6 @@ backup/
 node_modules/
 *.log
 *.png
+!docs/*.png
 .DS_Store
 Thumbs.db

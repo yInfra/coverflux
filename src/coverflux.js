@@ -445,7 +445,7 @@
   vec3 hueShift(vec3 c, float a){ const vec3 k = vec3(0.57735); float ca=cos(a); return c*ca + cross(k,c)*sin(a) + k*dot(k,c)*(1.0-ca); }
   vec2 clampLen(vec2 v, float m){ float l = length(v); return l > m ? v*(m/l) : v; }
 
-  vec2 gGx, gGy; float gShade, gSpec, gEdge, gRim, gE, gF, gDiag; vec2 gDispV, gMask;
+  vec2 gGx, gGy; float gShade, gSpec, gEdge, gRim, gE, gF, gDiag; vec2 gDispV, gMask, gQs;
 
   vec2 mirror(vec2 q){ return 1.0 - abs(1.0 - mod(q, 2.0)); }
   vec3 img(vec2 m){ return mix(textureGrad(uImgA, m, gGx, gGy).rgb, textureGrad(uImgB, m, gGx, gGy).rgb, uMix); }
@@ -453,7 +453,8 @@
   // cover space q: [0,1]^2 is the cover square. Outside: blurred ambient – unless fill spreads the sharp mirrored cover.
   vec3 cover(vec2 q, float fill){
     vec2 m = mirror(q);
-    vec2 qm = q + gMask;
+    // full mode: the mask travels with the morph; square mode: it stays put on screen (warps can fold far points inside)
+    vec2 qm = mix(q + gMask, gQs, uFrame);
     float d = max(abs(qm.x-0.5), abs(qm.y-0.5)) - 0.5;
     float soft = 0.002 + 0.12*clamp(fill, 0.0, 1.0);
     // square mode: the cover keeps its square, its edge goes soft and wobbles with the morph
@@ -660,6 +661,7 @@
     gDiag = 0.5*length(vec2(asp, 1.0));
     vec2 p = (vUv-0.5)*vec2(asp, 1.0);
     p *= 1.0 - 0.028*uPulse;              // centred punch on the beat
+    gQs = p/uSquare + 0.5;
     gShade = 1.0; gSpec = 0.0; gEdge = 0.0; gRim = 0.0; gE = 0.0; gF = 0.0; gDispV = vec2(0.0); gMask = vec2(0.0);
     vec2 w;
     if (uMode == 0) w = mLiquid(p);

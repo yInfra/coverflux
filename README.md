@@ -1,59 +1,87 @@
-# Coverflux – Cover-Morph-Visualizer für Spotify Desktop (Spicetify)
+# Coverflux
 
-Ein zusätzlicher Knopf rechts in der Playbar (neben dem Lyrics-/Karaoke-Knopf) verwandelt alles **außer der unteren Playbar** in einen Visualizer, der das Cover des laufenden Songs (oder der Playlist) zur Musik morpht.
+**Beat-synchroner Cover-Visualizer für Spotify Desktop ([Spicetify](https://spicetify.app)).**
 
-## Verhalten (v2.5)
-- **Bildfläche umschalten:** Der Knopf „Vollbild“ / „Quadrat“ in der Steuerleiste wird gespeichert.
-  - Vollbild: Das Cover breitet sich gespiegelt über den ganzen Bereich aus.
-  - Quadrat: Das Cover bleibt ein Quadrat mit weichem, mitwabberndem Rand. Ringsum liegt eine dunklere, verschwommene Spiegelung, die aus dem Cover herausglüht.
-  - Der Wechsel wird sanft überblendet.
-- **Playbar-Leuchten:** Die schwarze Playbar spiegelt die Unterkante des Visuals verschwommen wie eine OLED-Reflexion und blendet nach unten aus.
-- **Ein Zyklus dauert etwa 16 Takte.** Jeder Song-Abschnitt wird in ganze Zyklen von rund 16 Takten aufgeteilt, kürzere Abschnitte bilden einen einzigen Zyklus. Der Effekt ist etwa 60 % davon voll ausgeprägt. An jedem Abschnittsanfang und an jeder Zyklusgrenze ist exakt das Original zu sehen.
-- **Immer vorwärts:** Jeder Punkt läuft auf einer geschlossenen Bahn, die nur vorwärts geht und genau dort endet, wo sie begonnen hat. Die Bahn ist eine volle Drehung, eine Spiegel-Periode Drift, ein Orbit oder eine Droste-Periode. Nichts läuft rückwärts, nichts wird überblendet.
-- **Jeder Punkt hat seine eigene Uhr:** Punkte starten und landen leicht versetzt, je nach Mitte, Rand, Richtung oder Scherbe. Dieser Versatz ist das, was das Bild in Spiralen, Ströme und Faltungen biegt.
-- **Beat:** Die Bewegung läuft stetig weiter und beschleunigt auf jedem Beat, in lauten Passagen stärker. Dazu kommt ein kleiner Zoom-Puls. Je ruhiger die Musik, desto näher bleibt das Bild am Original.
-- **Tempo und Beat:** Das Modul folgt Spotifys Beat-Raster und prüft es selbst.
-  - Das Tempo kommt aus der mittleren Schlaglänge des Rasters, nicht aus Spotifys BPM-Angabe.
-  - Es erkennt Dreiertakt (3/4, 6/8), auch wenn Spotify 4/4 meldet. Dreiertakt wird nie halbiert, sondern bei Bedarf auf einen Puls pro Takt gesetzt.
-  - Es erkennt ein Raster, das um einen halben Schlag daneben liegt, und korrigiert es.
-  - Bei Halbtempo nimmt es den stärkeren der beiden Schläge.
-  - Der gefühlte Puls bleibt bei höchstens 140 BPM.
-- **Kontrolle:** Der Punkt im BPM-Knopf blinkt auf jedem gefühlten Beat, der Tooltip zeigt die Erkennung. Die Konsole meldet sie als `[Coverflux] Raster:`.
-- **Korrigieren:** Der BPM-Knopf schaltet pro Song zwischen Auto, ½, 1×, 2× und ⅓. Mit **Tap** (oder `T`) klopfst du mindestens viermal im Takt. Das setzt Tempo und Beat-Lage für diesen Song und wird gespeichert. Der Sync-Regler oder die Tasten `[` und `]` verschieben alles um ±250 ms.
-- **Modi:**
-  - Liquid: Marmorstrom, der eine volle Spiegel-Periode weiterfließt
-  - Vortex: jeder Ring macht volle Drehungen, das Auge führt, der Rand holt auf
-  - Ripple: Wasser zieht von einer Seite herein und auf der anderen wieder hinaus
-  - Prism: geriffeltes Glas mit Regenbogenkanten
-  - Kaleido und Mandala: falten sich von der Mitte nach außen und entfalten sich in derselben Richtung
-  - Fractal: faltet sich Stufe für Stufe ein und in derselben Reihenfolge wieder aus
-  - Tunnel: Droste-Tauchgang, der genau eine Periode tiefer endet
-- **Auto:** Pro Zyklus läuft ein Modus. Gewechselt wird nur, wenn das Original zu sehen ist. Manueller Moduswechsel und Pause führen jeden Punkt sanft nach Hause.
-- **Fallback:** Ohne Spotify-Analyse, etwa bei manchen Remastern und bei lokalen Dateien, wird der Takt simuliert.
-- Versionen sind Git-Tags (`v1`, `v2.0` bis `v2.5`). Eine alte Version holst du mit `git show v2.3:src/coverflux.js > coverflux.js`. Zum Testen lässt sich ein Zyklus mit `Coverflux.state.forceU = 0..1` einfrieren, `null` gibt ihn wieder frei.
+Ein Knopf in der Playbar neben dem Lyrics-Knopf verwandelt alles oberhalb der Playbar in einen Visualizer. Er morpht das Cover des laufenden Songs oder der Playlist im Takt der Musik. Jeder Effekt läuft in einer geschlossenen Bewegung und landet immer wieder exakt auf dem Original. Je ruhiger die Musik, desto mehr Original bleibt sichtbar.
 
-## Status (22.11.2026)
-- Installiert und angewendet auf Spotify 1.3.10.2586 mit Spicetify v2.46.7. Die CLI liegt unter `%LOCALAPPDATA%\spicetify\spicetify.exe`, steht aber **nicht im PATH**.
-- Im echten Spotify getestet. Die Audio-Analyse funktioniert, die Visuals reagieren also auf die echte Musik.
-- **Nach jedem Spotify-Update** ist der Patch weg. Dann einfach diesen Befehl ausführen:
-  ```powershell
-  & "$env:LOCALAPPDATA\spicetify\spicetify.exe" backup apply
-  ```
-  Falls dabei „backup version mismatched“ erscheint, vorher `spicetify restore backup apply` versuchen.
-- Für ein schnelles Update nach Codeänderungen `src/coverflux.js` nach `%APPDATA%\Spotify\Apps\xpui\extensions\` kopieren und Spotify neu starten. Alternativ `install.ps1` ausführen.
+| Vollbild | Quadrat |
+| --- | --- |
+| ![Kaleido im Vollbild](docs/preview-kaleido.png) | ![Quadrat mit leuchtender Spiegelung](docs/preview-square.png) |
+
+<sub>Die Vorschaubilder stammen aus dem Test-Harness und zeigen generierte Test-Cover.</sub>
 
 ## Installation
+
+Voraussetzung ist die [Spicetify CLI](https://spicetify.app/docs/getting-started).
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .install.ps1
+git clone https://github.com/yInfra/coverflux.git
+cd coverflux
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
-Voraussetzung ist die Spicetify CLI. Falls sie fehlt, nennt das Skript den offiziellen Installationsbefehl.
 
-## Entwicklung (Git-Repo)
-- Branch `main`. Jede veröffentlichte Version bekommt einen Tag `vX.Y`, die Versionsnummer steht oben in `src/coverflux.js`.
-- Ablauf: Änderung in `src/` vornehmen, im Harness testen, nach Spotify kopieren, committen und taggen.
-- Der Ordner `backup/` ist nur noch eine lokale Altlast und wird von Git ignoriert.
+Danach Spotify neu starten.
 
-## Dateien
-- `src/coverflux.js`: die Extension (eine Datei, ohne Build)
-- `test/harness.html`: Test mit nachgebautem Spicetify und Spotify-Layout. Starten mit `npx http-server -p 8765 .` und dann `http://localhost:8765/test/harness.html` öffnen. Mit `?noanalysis` testest du den Fallback.
-- Debug in den Spotify DevTools: `Coverflux.open()`, `Coverflux.state`
+> **Nach jedem Spotify-Update** ist der Spicetify-Patch weg. Dann `spicetify backup apply` ausführen (oder `install.ps1` erneut). Falls dabei „backup version mismatched“ erscheint, vorher `spicetify restore backup apply` ausführen.
+
+## Bedienung
+
+| Element | Funktion |
+| --- | --- |
+| Playbar-Knopf | Visualizer öffnen oder schließen, alternativ mit `Esc` schließen |
+| Modus | Auto oder ein fester Modus |
+| Vollbild / Quadrat | Vollbild: das Cover breitet sich gespiegelt über die ganze Fläche aus. Quadrat: das Cover bleibt ein Quadrat mit weichem, wabbelndem Rand in einer verschwommenen, leuchtenden Spiegelung. |
+| Tap / `T` | Mindestens viermal im Takt klicken. Das setzt Tempo und Beat-Lage für diesen Song. |
+| BPM-Knopf | Der Punkt blinkt auf jedem gefühlten Beat. Klicken schaltet pro Song zwischen Auto, ½, 1×, 2× und ⅓. Der Tooltip zeigt, was erkannt wurde. |
+| Sync, `[` und `]` | Verschiebt die Visuals um ±250 ms, etwa bei Bluetooth-Latenz. |
+
+## Wie es funktioniert
+
+- **Zyklen:** Jeder Song-Abschnitt wird in Zyklen von rund 16 Takten aufgeteilt. An jeder Zyklusgrenze und jedem Abschnittsanfang ist exakt das Original zu sehen. Auto wechselt den Modus nur dort, also unsichtbar.
+- **Immer vorwärts:** Jeder Bildpunkt läuft auf einer geschlossenen Bahn, die genau dort endet, wo sie begonnen hat. Die Bahn ist eine volle Drehung, eine Spiegel-Periode Drift, ein Orbit oder eine Droste-Periode. Jeder Punkt hat dabei seine eigene, leicht versetzte Uhr. Daraus entstehen Spiralen, Ströme und Faltungen, nichts läuft rückwärts.
+- **Beat:** Die Bewegung läuft stetig und beschleunigt auf jedem Beat, in lauten Passagen stärker. Dazu kommt ein kleiner Zoom-Puls.
+- **Tempo und Raster:** Grundlage ist Spotifys Audio-Analyse, deren Beat-Raster Coverflux selbst prüft.
+  - Das Tempo kommt aus der mittleren Schlaglänge, nicht aus Spotifys Kopfzahl.
+  - Dreiertakt (3/4, 6/8) wird erkannt, auch wenn Spotify 4/4 meldet, und nie halbiert.
+  - Ein Raster, das auf dem Offbeat liegt, wird um einen halben Schlag korrigiert.
+  - Bei Halbtempo zählt der stärkere Schlag.
+  - Der gefühlte Puls bleibt bei höchstens 140 BPM.
+- **Playbar-Leuchten:** Die Unterkante des Visuals spiegelt sich verschwommen in der schwarzen Playbar, wie eine OLED-Reflexion.
+- **Fallback:** Ohne Audio-Analyse, etwa bei lokalen Dateien, läuft ein simulierter Takt. Das wird angezeigt.
+- **Reduzierte Bewegung:** Bei `prefers-reduced-motion` gibt es keine Drehungen und deutlich weniger Ausschlag.
+
+### Modi
+
+| Modus | Effekt |
+| --- | --- |
+| Liquid | Marmorstrom, der eine volle Spiegel-Periode weiterfließt |
+| Vortex | Ringe machen volle Drehungen, das Auge führt, der Rand holt auf |
+| Ripple | Wasser zieht von einer Seite herein und auf der anderen hinaus |
+| Prism | geriffeltes Glas mit Regenbogenkanten |
+| Kaleido | faltet sich von der Mitte nach außen und entfaltet sich in dieselbe Richtung |
+| Mandala | Kaleido mit logarithmischer Spirale |
+| Fractal | faltet sich Stufe für Stufe ein und in derselben Reihenfolge wieder aus |
+| Tunnel | Droste-Tauchgang, der genau eine Periode tiefer endet |
+
+## Entwicklung
+
+```text
+src/coverflux.js       die Extension (eine Datei, kein Build)
+test/harness.html      nachgebautes Spicetify und Spotify-Layout mit generierten Covern
+test/grid.test.mjs     Tests für Tempo, Takt und Raster (laufen gegen den Harness)
+tools/preview.mjs      erzeugt docs/preview-*.png
+install.ps1            installiert die Extension und wendet Spicetify an
+```
+
+```bash
+npm install          # Playwright für die Tests
+npm test             # Syntax-Check und Raster-Tests (headless)
+npm run serve        # Harness unter http://localhost:8765/test/harness.html
+npm run preview      # Vorschaubilder neu rendern (braucht lokales Chrome mit GPU)
+```
+
+- Der Harness mit `?noanalysis` testet den Fallback.
+- Debuggen in den Spotify-DevTools: `Coverflux.open()`, `Coverflux.state` und `Coverflux.audio.describe()`. Mit `Coverflux.state.forceU = 0..1` frierst du einen Zyklus ein, `null` gibt ihn wieder frei.
+- Schnelles Update ohne Installer: `src/coverflux.js` nach `%APPDATA%\Spotify\Apps\xpui\extensions\` kopieren und Spotify neu starten.
+- Versionen sind Git-Tags (`v1` … `v2.5`), die Änderungen stehen im [CHANGELOG](CHANGELOG.md). Die Versionsnummer steht oben in `src/coverflux.js` und in `package.json`.
+- GitHub Actions führt `npm test` bei jedem Push aus.
