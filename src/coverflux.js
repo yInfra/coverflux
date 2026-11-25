@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.2.0
+// VERSION: 2.3.0
 
 (function Coverflux() {
   "use strict";
@@ -18,7 +18,7 @@
   /* ------------------------------------------------------------------ */
   const SETTINGS_KEY = "coverflux:settings";
   const TEMPO_KEY = "coverflux:tempo"; // per-track tempo-feel overrides
-  const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", showInfo: true, syncMs: 0 };
+  const DEFAULTS = { source: "track", intensity: 0.75, mode: "auto", showInfo: true, syncMs: 0, frame: "full" };
   const loadJSON = (k, def) => { try { return Object.assign({}, def, JSON.parse(S.LocalStorage.get(k) || "{}")); } catch (_) { return Object.assign({}, def); } };
   const settings = loadJSON(SETTINGS_KEY, DEFAULTS);
   if (!PRESET_KEYS().includes(settings.mode) && settings.mode !== "auto") settings.mode = "auto";
@@ -325,7 +325,7 @@
   in vec2 vUv; out vec4 o;
   uniform sampler2D uImgA, uImgB, uPrev;
   uniform vec2 uRes;
-  uniform float uAct, uMix, uSquare, uPhi, uDepth, uGate, uLag, uFillK, uFlow, uPulse, uSeed, uSegs, uHue, uTrail, uGlow, uDisp, uTurns, uDir;
+  uniform float uFrame, uAct, uMix, uSquare, uPhi, uDepth, uGate, uLag, uFillK, uFlow, uPulse, uSeed, uSegs, uHue, uTrail, uGlow, uDisp, uTurns, uDir;
   uniform int uMode;
   const float TAU = 6.2831853, PI = 3.14159265;
   mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,s,-s,c); }
@@ -344,11 +344,17 @@
     vec2 qm = q + gMask;
     float d = max(abs(qm.x-0.5), abs(qm.y-0.5)) - 0.5;
     float soft = 0.002 + 0.12*clamp(fill, 0.0, 1.0);
+    // square mode: the cover keeps its square, its edge goes soft and wobbles with the morph
+    d += uFrame*gE*0.035*sin(qm.x*9.0 + uFlow*0.7)*sin(qm.y*8.0 - uFlow*0.6 + uSeed);
+    soft = mix(soft, 0.006 + 0.06*gE, uFrame);
     float mask = smoothstep(-soft, soft, d - fill);
     vec3 c = img(m);
     if (mask > 0.0) {
       float dd = max(d - fill, 0.0);
       vec3 amb = imgLod(m, 6.0) * (0.10 + 0.32*exp(-dd*1.6)) * (1.0 - 0.75*exp(-dd*9.0));
+      // square mode: a darker, blurred mirror everywhere that glows out of the cover edge instead of a shadow gap
+      vec3 glow = imgLod(m, 5.0) * (0.11 + 0.34*exp(-dd*2.2)) + imgLod(m, 7.0) * 0.18*exp(-dd*4.0)*(1.0 + gE);
+      amb = mix(amb, glow, uFrame);
       c = mix(c, amb, mask);
     }
     return c;
@@ -561,7 +567,7 @@
       float J = (dx.x*dy.y - dx.y*dy.x)/(px*px);
       gShade *= 1.0 + gE*(0.6*exp(-abs(J)*2.2) - 0.07);
     }
-    vec3 c = colorAt(w, dx, dy, uFillK*uAct);
+    vec3 c = colorAt(w, dx, dy, uFillK*uAct*(1.0 - uFrame));
     c *= gShade;
     c += gSpec*vec3(1.0, 0.98, 0.94);
     c = mix(c, c*0.1, gEdge*0.85);
@@ -715,7 +721,7 @@
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.imgB); gl.uniform1i(P.u.uImgB, 2);
       gl.uniform2f(P.u.uRes, this.w, this.h);
       if (P.u.uMode) gl.uniform1i(P.u.uMode, f.mode);
-      for (const k of ["Act", "Mix", "Square", "Phi", "Depth", "Gate", "Lag", "FillK", "Flow", "Pulse", "Seed", "Segs", "Hue", "Trail", "Glow", "Disp", "Turns", "Dir"]) {
+      for (const k of ["Frame", "Act", "Mix", "Square", "Phi", "Depth", "Gate", "Lag", "FillK", "Flow", "Pulse", "Seed", "Segs", "Hue", "Trail", "Glow", "Disp", "Turns", "Dir"]) {
         const loc = P.u["u" + k];
         if (loc) gl.uniform1f(loc, k === "Trail" && this.needsInit ? 0 : f[k.toLowerCase()]);
       }
@@ -840,6 +846,8 @@
   #coverflux input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.2)}
   #coverflux .cf-sync input{width:64px}
   #coverflux .cf-val{min-width:44px;font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;color:#f3efe8;font-size:11px}
+  #coverflux .cf-pill{display:flex;align-items:center;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;color:#f3efe8;transition:background .2s ease}
+  #coverflux .cf-pill:hover{background:rgba(255,255,255,.08)}
   #coverflux .cf-bpm{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:999px;font-size:12px;font-weight:600;
     font-variant-numeric:tabular-nums;color:#f3efe8;transition:background .2s ease}
   #coverflux .cf-bpm:hover{background:rgba(255,255,255,.08)}
@@ -885,6 +893,7 @@
       <label class="cf-field cf-int">Intensität <input class="cf-intensity" type="range" min="0" max="100" aria-label="Intensität"></label>
       <label class="cf-field cf-sync" title="Verschiebt die Visuals gegenüber dem Ton. Plus = früher. Tasten [ und ]">Sync
         <input class="cf-syncr" type="range" min="-250" max="250" step="10" aria-label="Sync-Versatz"><span class="cf-val cf-syncv"></span></label>
+      <button class="cf-pill cf-frame" aria-label="Bildfläche umschalten: Vollbild gespiegelt oder Quadrat"></button>
       <button class="cf-bpm" aria-label="Tempo-Gefühl umschalten"><span class="cf-dot"></span><span class="cf-bpmv">– BPM</span><small class="cf-bpmm"></small></button>
       <button class="cf-close" aria-label="Visualizer schließen" title="Schließen (Esc)">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"/></svg>
@@ -897,6 +906,7 @@
   const elTitle = $(".cf-title"), elArtist = $(".cf-artist"), elInfo = $(".cf-info");
   const elMode = $(".cf-mode"), elInt = $(".cf-intensity"), elNote = $(".cf-note");
   const elSync = $(".cf-syncr"), elSyncV = $(".cf-syncv");
+  const elFrame = $(".cf-frame");
   const elBpm = $(".cf-bpm"), elBpmV = $(".cf-bpmv"), elBpmM = $(".cf-bpmm"), elDot = $(".cf-dot");
   const segButtons = Array.from(root.querySelectorAll(".cf-seg button"));
   const thumb = $(".cf-thumb");
@@ -912,6 +922,8 @@
     elSync.style.setProperty("--v", ((settings.syncMs + 250) / 5) + "%");
     elSyncV.textContent = (settings.syncMs > 0 ? "+" : "") + settings.syncMs + " ms";
     root.classList.toggle("cf-noinfo", !settings.showInfo);
+    elFrame.textContent = settings.frame === "square" ? "Quadrat" : "Vollbild";
+    elFrame.title = settings.frame === "square" ? "Cover bleibt ein Quadrat – klicken für gespiegeltes Vollbild" : "Gespiegeltes Vollbild – klicken, damit das Cover ein Quadrat bleibt";
   }
 
   let noteTimer = 0;
@@ -930,6 +942,7 @@
   elInt.addEventListener("input", () => { settings.intensity = elInt.value / 100; elInt.style.setProperty("--v", elInt.value + "%"); saveSettings(); });
   const setSync = (ms) => { settings.syncMs = clamp(Math.round(ms / 10) * 10, -250, 250); saveSettings(); syncControls(); };
   elSync.addEventListener("input", () => setSync(+elSync.value));
+  elFrame.addEventListener("click", () => { settings.frame = settings.frame === "square" ? "full" : "square"; saveSettings(); syncControls(); });
   elBpm.addEventListener("click", () => {
     const uri = audio.uri;
     if (!uri) return;
@@ -980,7 +993,7 @@
   let renderer = null;
   const audio = new AudioModel();
   const state = {
-    energyFast: 0, energySlow: 0, gate: 0, env: 0, pulse: 0, mix: 1, dissolve: 0,
+    energyFast: 0, energySlow: 0, gate: 0, frameMix: settings.frame === "square" ? 1 : 0, env: 0, pulse: 0, mix: 1, dissolve: 0,
     presetKey: "liquid", seed: 0, segs: 8, dir: 1, turns: 0, lag: 0.35, cycScale: 1, pending: false,
     cycleId: null, cycleLen: 32, cycleU: 0, felt: 0, flow: 0, forceU: null,
     pos: 0, posAt: 0, playing: false, lastSync: 0, time: 0,
@@ -1071,6 +1084,7 @@
     state.env = env;
     state.dissolve *= Math.exp(-dt / 0.3);
     state.mix = Math.min(1, state.mix + dt / 1.8);
+    state.frameMix += clamp((settings.frame === "square" ? 1 : 0) - state.frameMix, -dt * 1.6, dt * 1.6); // eased toggle
 
     const accent = audio.accentAt(Fi * m + audio.d0);
     const downbeat = ((Fi % audio.bpb) + audio.bpb) % audio.bpb === 0 ? 1.25 : 1;
@@ -1083,7 +1097,7 @@
     // how far the sharp mirrored cover spreads around the square: one smooth swell per cycle, not per pixel
     const act = smooth01((u - 0.06) / 0.18) * smooth01((0.94 - u) / 0.18) * clamp(depth * 2.2) * gate;
     renderer.render({
-      act, mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp),
+      frame: smooth01(state.frameMix), act, mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp),
       phi: u, depth: depth * gate, gate, lag: state.lag, fillk: P.fill, flow: state.flow, pulse: state.pulse,
       seed: state.seed, segs: state.segs, turns: state.turns, dir: state.dir,
       hue: state.dir * env * 0.4, glow: env * 0.5, disp: P.mode === 4 ? 0.1 : env * 0.004,
