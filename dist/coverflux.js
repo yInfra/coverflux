@@ -1052,7 +1052,7 @@ function createCoverflux(host) {
 
     describe() {
       const m = this.mult(), g = this.grid;
-      if (this.own) return "Eigene Analyse (" + this.ownNote + ") · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → gefühlt " + Math.round(this.tempo / m) + " BPM";
+      if (this.own) return "Eigene Analyse" + (this.ownNote ? " (" + this.ownNote + ")" : "") + " · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → gefühlt " + Math.round(this.tempo / m) + " BPM";
       return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · Raster " + Math.round(this.tempo) + " BPM" +
         (g ? (g.triple ? " · Dreiertakt" : " · Zweiertakt") + (this.shift ? " · um ½ Schlag korrigiert" : "") : "") +
         " → gefühlt " + Math.round(this.tempo / m) + " BPM";

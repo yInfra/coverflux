@@ -1,6 +1,6 @@
 // Bundles the platform-neutral core with an adapter into single files:
 //   dist/coverflux.js      – Spicetify extension (beat engine + core + adapters/spicetify)
-//   dist/coverflux-web.js  – browser/web app (beat engine + core + adapters/web), used by web/index.html
+//   web/coverflux-web.js   – browser/web app (beat engine + core + adapters/web), served with web/index.html
 // Both bundles are committed so users install without Node. `npm run build` (CI checks they are up to date)
 import fs from "node:fs";
 import path from "node:path";
@@ -24,4 +24,4 @@ function bundle(adapterFile, out) {
 }
 
 bundle("adapters/spicetify.js", "coverflux.js");
-bundle("adapters/web.js", "coverflux-web.js");
+bundle("adapters/web.js", "../web/coverflux-web.js");
