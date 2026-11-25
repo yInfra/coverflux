@@ -1056,6 +1056,8 @@ function createCoverflux(host) {
 
     describe() {
       const m = this.mult(), g = this.grid;
+      if (this.synthetic) return t("Simulierter Takt", "Simulated beat") + " · " + Math.round(this.tempo / m) + " BPM";
+      if (this.a && this.a.live) return t("Live-Analyse", "Live analysis") + " · " + Math.round(this.tempo) + " BPM" + (this.a.track && this.a.track.confidence ? " · " + t("Sicherheit ", "confidence ") + Math.round(this.a.track.confidence * 100) + " %" : "");
       if (this.own) return t("Eigene Analyse", "Own analysis") + (this.ownNote ? " (" + this.ownNote + ")" : "") + " · " + Math.round(this.tempo) + " BPM " + ((this.a.track && this.a.track.time_signature) || this.bpb) + "/4 → " + t("gefühlt ", "felt ") + Math.round(this.tempo / m) + " BPM";
       return "Spotify " + Math.round(this.spotifyTempo) + " BPM " + this.spotifyBpb + "/4 · " + t("Raster ", "grid ") + Math.round(this.tempo) + " BPM" +
         (g ? (g.triple ? t(" · Dreiertakt", " · triple meter") : t(" · Zweiertakt", " · duple meter")) + (this.shift ? t(" · um ½ Schlag korrigiert", " · moved by ½ beat") : "") : "") +
