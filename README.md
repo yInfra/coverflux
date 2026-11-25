@@ -25,6 +25,12 @@ Open **[yinfra.github.io/coverflux](https://yinfra.github.io/coverflux/)** and p
 
 You can drop in your own image as the cover at any time.
 
+**Install it as an app** on Android, iPhone or desktop:
+- Chrome or Edge: *Install app* / *Add to home screen*.
+- Safari on iPhone: *Share → Add to Home Screen*.
+
+The installed app runs full screen, works offline and can open audio files directly (*Open with → Coverflux*). Tab audio needs a desktop browser. On phones, use a file or the microphone.
+
 ### Spotify Desktop
 On Windows, macOS and Linux, Coverflux runs as a [Spicetify](https://spicetify.app) extension. A button next to the lyrics button turns everything above the playbar into the visualizer, and a soft reflection of it glows in the playbar.
 

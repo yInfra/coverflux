@@ -4,6 +4,12 @@
 
 **[▶ Im Browser ausprobieren](https://yinfra.github.io/coverflux/)**: Datei abspielen, Tab-, System- oder Mikrofonton live, auf Desktop und Handy, ohne Upload.
 
+**Als App installieren:**
+- Chrome oder Edge: „App installieren“ beziehungsweise „Zum Startbildschirm“.
+- Safari auf dem iPhone: „Teilen → Zum Home-Bildschirm“.
+
+Die installierte App läuft im Vollbild, funktioniert offline und öffnet Audiodateien direkt.
+
 Ein Knopf in der Playbar neben dem Lyrics-Knopf verwandelt alles oberhalb der Playbar in einen Visualizer. Er morpht das Cover des laufenden Songs oder der Playlist im Takt durch mathematische Abbildungen: Kaleidoskope, hyperbolische Kachelungen, Droste-Spiralen, Kreisinversionen. Jeder Effekt ist eine geschlossene Bewegung und landet immer wieder exakt auf dem Original. Je ruhiger die Musik, desto mehr Original bleibt sichtbar.
 
 | Vollbild | Quadrat |
