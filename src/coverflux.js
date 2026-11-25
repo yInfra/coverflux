@@ -1,7 +1,7 @@
 // NAME: Coverflux
 // AUTHOR: yInfra
 // DESCRIPTION: Turns everything above the playbar into a beat-locked visualizer that morphs the cover art along beat-locked loops that always move forward and land on the original.
-// VERSION: 2.1.0
+// VERSION: 2.2.0
 
 (function Coverflux() {
   "use strict";
@@ -46,13 +46,15 @@
   // Auto mode picks from these depending on the energy of the current song section.
   const CALM_POOL = ["liquid", "ripple", "kaleido", "mandala", "prism"];
   const LOUD_POOL = ["kaleido", "fractal", "vortex", "shatter", "tunnel", "mandala", "liquid", "prism"];
-  const CYCLE_BARS = 8; // one full loop away from the cover and back onto it
+  const CYCLE_BARS = 16; // one full loop away from the cover and back onto it
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                             */
   /* ------------------------------------------------------------------ */
   const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
   const lerp = (a, b, t) => a + (b - a) * t;
+  // progress inside one beat: a steady glide plus a surge right on the beat – never stands still
+  const beatEase = (fr, k, b) => (1 - b) * fr + b * (1 - Math.pow(1 - fr, k));
   const smooth01 = (x) => { const t = clamp(x); return t * t * (3 - 2 * t); };
   const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
   const hashStr = (s) => {
@@ -209,8 +211,8 @@
     }
 
     // Splits every section into ~CYCLE_BARS-bar cycles (whole bars, last one ends on the next section start).
-    // u = beat-stepped progress 0..1: each beat pushes forward, eased by kE.
-    cycleAt(F, m, kE) {
+    // u = progress 0..1: steady glide plus a surge on every beat (ease).
+    cycleAt(F, m, ease) {
       const { arr, total } = this.feltAnchors(m);
       const bpb = this.bpb;
       if (F < arr[0]) return { id: "pre", u: 0, len: 4 * CYCLE_BARS };
@@ -229,7 +231,7 @@
       const start = Fa + edge(k) * bpb, len = Math.max(1, (edge(k + 1) - edge(k)) * bpb);
       const local = clamp(F - start, 0, len);
       const kk = Math.floor(local), fr = local - kk;
-      return { id: si + ":" + k, u: clamp((kk + 1 - Math.pow(1 - fr, kE)) / len), len };
+      return { id: si + ":" + k, u: clamp((kk + ease(fr)) / len), len };
     }
 
     // Spotify often reports double time for songs that *feel* half as fast.
@@ -237,16 +239,7 @@
     detectFeel() {
       const tempo = this.tempo, acc = this.acc;
       if (tempo < 58) return 0.5;
-      if (tempo < 112) return 1;
-      let even = 0, odd = 0, ne = 0, no = 0;
-      for (let i = 0; i < acc.length; i++) {
-        if (((i - this.d0) % 2 + 2) % 2 === 0) { even += acc[i]; ne++; } else { odd += acc[i]; no++; }
-      }
-      const ratio = (even / Math.max(ne, 1) + 0.02) / (odd / Math.max(no, 1) + 0.02);
-      this.parity = ratio;
-      if (tempo >= 152) return ratio > 0.75 ? 2 : 1;
-      if (tempo >= 128 && ratio > 1.22) return 2;
-      if (ratio > 1.55) return 2;
+      if (tempo > 140) return 2; // max 140 felt BPM
       return 1;
     }
 
@@ -374,8 +367,8 @@
   }
 
   // a point's own progress through the cycle: starts later and lands later the larger lam is, always within the cycle
-  float prog(float lam){ float x = clamp((uPhi - uLag*lam)/(1.0 - uLag), 0.0, 1.0); return x*x*x*(x*(x*6.0-15.0)+10.0); }
-  float envOf(float x){ return smoothstep(0.0, 0.3, x)*(1.0 - smoothstep(0.7, 1.0, x)); }
+  float prog(float lam){ float x = clamp((uPhi - uLag*lam)/(1.0 - uLag), 0.0, 1.0); return mix(x, x*x*(3.0-2.0*x), 0.5); }
+  float envOf(float x){ return smoothstep(0.0, 0.2, x)*(1.0 - smoothstep(0.8, 1.0, x)); }
   float sweep(vec2 p, float ang){ return clamp(0.5 + 0.5*dot(p, vec2(cos(ang), sin(ang)))/gDiag, 0.0, 1.0); }
 
   /* ---- morph characters ---- */
@@ -494,12 +487,12 @@
     float en = envOf(ph);
     gE = en*uDepth;
     float b = en*clamp(0.45 + uDepth*0.9, 0.0, 1.0);
-    float chi = uDir*0.5*PI*uPhi;
-    float off = uSeed*0.53 + uDir*PI*0.35*uPhi + 0.06*sin(uFlow*TAU/8.0);
+    float chi = uDir*PI*uPhi;
+    float off = uSeed*0.53 + uDir*PI*0.7*uPhi + 0.06*sin(uFlow*TAU/8.0);
     vec2 k = rot(chi)*kfold(rot(-chi)*p, uSegs, off);
     if (mandala) {
       float rk = length(k) + 0.015; float ak = atan(k.y, k.x);
-      float m = (log(rk) + uFlow*0.12)/1.1;
+      float m = (log(rk) + uFlow*0.09)/1.1;
       float tri = 1.0 - abs(1.0 - mod(m, 2.0));
       ak += 0.3*sin(m*PI);
       k = 0.12*exp(tri*1.1)*vec2(cos(ak), sin(ak));
@@ -993,7 +986,7 @@
     pos: 0, posAt: 0, playing: false, lastSync: 0, time: 0,
   };
   let isOpen = false, raf = 0, lastNow = 0, layoutTick = 0;
-  const envOf = (x) => smooth01(x / 0.3) * (1 - smooth01((x - 0.7) / 0.3));
+  const envOf = (x) => smooth01(x / 0.2) * (1 - smooth01((x - 0.8) / 0.2));
 
   // Latched once per cycle, while every point is home – so switching never shows.
   function startCycle(id, len) {
@@ -1015,7 +1008,7 @@
     state.cycScale = clamp((len - 4) / 12); // very short sections only breathe a little
     const spins = !rm && state.cycScale > 0.6;
     state.turns = !spins ? 0 : key === "vortex" ? state.dir * (E > 0.7 ? 2 : 1) : E > 0.42 ? state.dir : 0;
-    state.lag = rm ? 0.1 : 0.18 + 0.14 * E;
+    state.lag = rm ? 0.08 : 0.12 + 0.1 * E;
   }
 
   function syncPosition(now) {
@@ -1055,14 +1048,15 @@
     // ---- beat clock: felt beats; ~8-bar cycles fitted into each song section, every point home on its downbeats ----
     const m = audio.mult();
     const F = (audio.beatPos(pos) - audio.d0) / m;
-    const kE = lerp(1.6, 4.0, clamp(state.energySlow * 1.2)); // calm: smooth glide, loud: hard push on every beat
-    const cyc = audio.cycleAt(F, m, kE);
+    const eS = clamp(state.energySlow * 1.2);
+    const ease = (fr) => beatEase(fr, lerp(2.5, 4.5, eS), lerp(0.3, 0.6, eS)); // calm: mostly glide, loud: harder surge
+    const cyc = audio.cycleAt(F, m, ease);
     if (cyc.id !== state.cycleId) { state.cycleId = cyc.id; startCycle(cyc.id, cyc.len); }
     const u = state.forceU != null ? clamp(state.forceU) : cyc.u;
     state.cycleU = u;
     state.felt = F;
     const Fi = Math.floor(F), Ff = F - Fi;
-    if (live) state.flow = Fi + 1 - Math.pow(1 - Ff, kE);
+    if (live) state.flow = Fi + ease(Ff);
 
     // gate: glides every point home for a manual mode change or a pause, then back out
     if (state.pending || !live) {
@@ -1087,7 +1081,7 @@
     const P = PRESETS[state.presetKey];
     const asp = renderer.w / renderer.h;
     // how far the sharp mirrored cover spreads around the square: one smooth swell per cycle, not per pixel
-    const act = smooth01((u - 0.12) / 0.3) * smooth01((0.88 - u) / 0.3) * clamp(depth * 2.2) * gate;
+    const act = smooth01((u - 0.06) / 0.18) * smooth01((0.94 - u) / 0.18) * clamp(depth * 2.2) * gate;
     renderer.render({
       act, mode: P.mode, mix: state.mix, square: Math.min(0.8, 0.86 * asp),
       phi: u, depth: depth * gate, gate, lag: state.lag, fillk: P.fill, flow: state.flow, pulse: state.pulse,
